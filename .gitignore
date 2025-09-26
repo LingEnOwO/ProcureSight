@@ -1,0 +1,29 @@
+# --- env & secrets ---
+.env
+.env.local
+.env.*.local
+
+# --- python ---
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# --- node (coming soon) ---
+node_modules/
+.next/
+dist/
+build/
+coverage/
+
+# --- os/editor cruft ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# --- data: generated or large ---
+data/samples/**
+!data/samples/README.md
