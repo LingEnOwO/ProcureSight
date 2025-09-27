@@ -178,6 +178,86 @@ data/
 - Include a few edge cases: duplicate `invoice_no`, credit/negative lines, long invoices.
 - PDFs mix text-based and image-only (for later OCR).
 
+
+### Create `docker-compose.yml` and `Makefile` (required before loading)
+
+We use Compose to run **Postgres** and **MinIO** locally, and a Makefile for repeatable commands. Create these two files at the **repo root** before running the load step.
+
+#### `docker-compose.yml`
+
+> Note: Compose v2 treats the top-level `version:` field as obsolete. If you see a warning about `version` you can safely remove that line.
+
+```yaml
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: procuresight
+      POSTGRES_USER: procure
+      POSTGRES_PASSWORD: procure
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U procure -d procuresight"]
+      interval: 5s
+      retries: 20
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web console
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
+      interval: 5s
+      retries: 30
+
+volumes:
+  db_data:
+  minio_data:
+```
+
+#### `Makefile`
+
+Place this `Makefile` at the repo root. Each recipe line begins with a **TAB**.
+
+```make
+.PHONY: up down ps dbshell seed load-samples
+
+up:        ## start db + minio
+	docker compose up -d db minio
+
+down:      ## stop all
+	docker compose down
+
+ps:
+	docker compose ps
+
+dbshell:   ## psql into DB from host
+	psql "postgresql://procure:procure@localhost:5432/procuresight"
+
+seed:      ## create schema
+	python scripts/seed.py
+
+load-samples: ## upload sample files to MinIO + register in raw_docs
+	python scripts/load_samples.py data/samples
+```
+
+**Usage**
+```bash
+make up         # starts Postgres + MinIO
+make seed       # creates tables/fixtures
+make load-samples
+```
+
 #### How to load into the app
 
 **Follow this exact order (matches what we just did):**
@@ -322,28 +402,28 @@ ProcureSight/
 # Web
 NEXTAUTH_URL=http://localhost:3000
 NEXTAUTH_SECRET=<generate>
-EMAIL_SERVER=smtp://mailhog:1025
-EMAIL_FROM=dev@procuresight.local
-# RESEND_API_KEY=
-# SENDGRID_API_KEY=
 
 # API
 API_PORT=8000
 OPENAI_API_KEY=
 AWS_REGION=
 
-# DB
+# DB (container-to-container; used by services when we add them)
 POSTGRES_HOST=db
 POSTGRES_USER=procure
 POSTGRES_PASSWORD=procure
 POSTGRES_DB=procuresight
 DATABASE_URL=postgresql://procure:procure@db:5432/procuresight
 
-# Storage (MinIO)
+# Storage (container-to-container)
 S3_ENDPOINT=http://minio:9000
 S3_ACCESS_KEY=minioadmin
 S3_SECRET_KEY=minioadmin
 S3_BUCKET=procuresight
+
+# Email (dev)
+EMAIL_SERVER=smtp://mailhog:1025
+EMAIL_FROM=dev@procuresight.local
 
 # Alerts
 SLACK_WEBHOOK_URL=
