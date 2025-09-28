@@ -1,4 +1,4 @@
-.PHONY: up down ps logs dbshell seed load-samples openapi types
+.PHONY: up down ps logs dbshell seed load-samples openapi types slack-test
 
 up:        ## start db + minio
 	docker compose up -d db minio
@@ -23,3 +23,6 @@ openapi:   ## dump OpenAPI spec to openapi.json
 
 types: openapi  ## generate TS types from openapi.json
 	pnpm dlx openapi-typescript openapi.json -o packages/types/api.d.ts
+
+slack-test:
+	./scripts/slack_test.sh
