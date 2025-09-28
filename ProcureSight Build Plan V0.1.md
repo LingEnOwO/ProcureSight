@@ -500,6 +500,34 @@ requests.post(os.environ['SLACK_WEBHOOK_URL'], json={"text":"✅ ProcureSight we
 
 ---
 
+### Architecture recap (so far)
+
+What’s running and how the pieces connect — quick mental model:
+
+- **apps/api/** → FastAPI backend (Python). Exposes endpoints (e.g., `/vendors`) and publishes the OpenAPI spec at `/openapi.json`.
+- **packages/types/** → Auto‑generated TypeScript definitions (`api.d.ts`) from the OpenAPI spec. Keeps frontend and backend in sync.
+- **packages/client/** → Tiny TypeScript SDK that wraps `fetch` using those types (via `openapi-fetch`). Any app can import this (web/admin later).
+- **apps/web/** → Next.js frontend (TypeScript/React). Uses the client SDK to call the API and render UI. *(Scaffolded next in the plan.)*
+
+**Data flow:**
+```
+FastAPI (Python)
+   ↓ generates
+OpenAPI JSON
+   ↓ generates
+packages/types/api.d.ts (TS types)
+   ↓ wrapped by
+packages/client (typed SDK)
+   ↓ used by
+apps/web (Next.js UI)
+```
+
+**Dev environment reminders:**
+- **Host vs. containers:** use `localhost` in `.env.local` for host‑run scripts; use `db`/`minio` inside containers (`.env.example`).
+- **Type gen loop:** `make openapi` → `make types` (refresh spec, then TS types). You can also generate directly from the running server URL later.
+- **Why a separate client package?** Centralizes API setup + types once, so multiple apps can reuse it without duplicating code.
+
+
 ## 3) Data model (v0)
 
 **Tables**
