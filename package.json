@@ -1,8 +1,8 @@
 {
-	"dependencies": {
-		"openapi-fetch": "^0.14.0"
-	},
-	"devDependencies": {
-		"@types/node": "^24.5.2"
-	}
+  "name": "procuresight",
+  "private": true,
+  "scripts": {
+    "web:test": "pnpm --filter ./apps/web vitest",
+    "web:dev": "pnpm --filter ./apps/web dev"
+  }
 }
