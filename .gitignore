@@ -27,3 +27,6 @@ Thumbs.db
 # --- data: generated or large ---
 data/samples/**
 !data/samples/README.md
+
+# --- generated api spec ---
+openapi.json
