@@ -527,29 +527,128 @@ apps/web (Next.js UI)
 - **Type gen loop:** `make openapi` → `make types` (refresh spec, then TS types). You can also generate directly from the running server URL later.
 - **Why a separate client package?** Centralizes API setup + types once, so multiple apps can reuse it without duplicating code.
 
+---
 
 ## 3) Data model (v0)
 
-**Tables**
+> Goal: clean separation of **files** (MinIO/S3) and **facts** (Postgres), safe multi-tenant by default, and easy to evolve.
 
-- `orgs(id, name)`
-- `users(id, org_id, email, role)`
-- `vendors(id, org_id, name)`
+### 3.1 Why this shape?
+- **Multi-tenant from day 0**: every business table has `org_id`; RLS enforces org isolation in the DB.
+- **Files vs. structured data**: PDFs live in object storage; Postgres holds pointers + invoice facts for querying.
+- **Staging → authoritative**: `extractions` stores raw JSON from OCR/LLM; `invoices`/`invoice_lines` store validated facts.
+- **Auditability & monitoring**: `audit_log` for who/what/when; `alerts` for anomalies (duplicates, mismatches, late, etc.).
+
+### 3.2 Entity map (quick ER sketch)
+```
+orgs 1─* users
+  │
+  ├─* vendors
+  │     └─* invoices ──* invoice_lines
+  │            ▲   \
+  │            │    └─(optional) raw_docs (file pointer)
+  │            │                     │
+  │            │                     └─* extractions (JSON results per file)
+  └─* alerts, audit_log
+```
+
+### 3.3 Tables (v0)
+- `orgs(id, name, created_at)`
+- `users(id, org_id, email, role, created_at)`
+- `vendors(id, org_id, name, created_at)`
 - `raw_docs(id, org_id, s3_key, filename, mime, bytes, uploaded_by, uploaded_at)`
 - `extractions(id, raw_doc_id, status, confidence, payload_json, created_at)`
-- `invoices(id, org_id, vendor_id, invoice_no, date, currency, subtotal, tax, total)`
+- `invoices(id, org_id, vendor_id, invoice_no, invoice_date, due_date, currency, subtotal, tax, total, status, raw_doc_id, created_at)`
 - `invoice_lines(id, invoice_id, sku, desc, qty, unit_price, line_total)`
-- `alerts(id, org_id, type, severity, message, meta_json, created_at)`
+- `alerts(id, org_id, type, severity, message, meta_json, created_at, resolved)`
 - `audit_log(id, org_id, actor_id, action, target, meta_json, at)`
 
-**Indexes/constraints**
+**Keys & types (high-level):**
+- UUID primary keys for most entities; `raw_docs.id` is `BIGSERIAL` (handy for ingestion logs).
+- Money: `NUMERIC(18,2)`; quantities/price: `NUMERIC(18,4)`.
 
-- Unique `(org_id, vendor_id, invoice_no)` to detect duplicates
-- Partial index on `alerts(severity)` for quick unread counts
+### 3.4 Constraints & indexes
+- **Duplicate protection**: `UNIQUE (org_id, vendor_id, invoice_no)` on `invoices` (same invoice number can exist across vendors or orgs, but not within the same pair).
+- **Alert performance**: partial index `CREATE INDEX ... ON alerts(severity) WHERE resolved = FALSE` for fast “unresolved by severity”.
+- **FK deletes**:
+  - `... ON DELETE CASCADE` for org-scoped children (users/vendors/raw_docs/invoices/invoice_lines/alerts/audit_log).
+  - `invoices.raw_doc_id ... ON DELETE SET NULL` so history remains if a file is removed.
 
-**Row‑level security (RLS)**
+### 3.5 Row-level security (RLS)
+**What it is:** DB-enforced row filters. We enable RLS on org-scoped tables and add policies that compare the row’s `org_id` to the current session’s org.
 
-- Enable RLS; policies to enforce `org_id = current_setting('app.org_id')::uuid`
+**How it works here:**
+- App (or `psql`) sets the org context per request/session:
+  ```sql
+  SET app.org_id = '<org-uuid>';  -- used by policies
+  ```
+- Example SELECT policy (conceptual):
+  ```sql
+  -- Only see rows in your org
+  CREATE POLICY org_select_invoices ON invoices
+    FOR SELECT USING (org_id = current_setting('app.org_id', true)::uuid);
+  ```
+- Example INSERT policy (conceptual):
+  ```sql
+  -- Only insert rows for your org
+  CREATE POLICY org_insert_invoices ON invoices
+    FOR INSERT WITH CHECK (org_id = current_setting('app.org_id', true)::uuid);
+  ```
+- For children lacking `org_id` (e.g., `invoice_lines`), the policy checks via the parent (`EXISTS (SELECT 1 FROM invoices ...)`).
+
+> **Why RLS now?** It prevents the classic “forgot the WHERE org_id = ?” bug and keeps multi-tenant safety **in the database**, not just in app code.
+
+### 3.6 What creates this schema?
+- `scripts/seed.py` executes SQL DDL to create tables, constraints, indexes, and RLS policies. It’s **idempotent** (safe to re-run).
+- Run order during dev:
+  ```bash
+  make up    # start Postgres + MinIO
+  make seed  # create/verify schema
+  ```
+
+### 3.7 Verify quickly in psql
+```sql
+-- show tables
+\dt
+
+-- invoices unique constraint exists
+\d invoices  -- look for "UNIQUE (org_id, vendor_id, invoice_no)"
+
+-- policies are present
+SELECT policyname, tablename
+FROM pg_policies
+WHERE tablename IN ('users','vendors','raw_docs','extractions','invoices','invoice_lines','alerts','audit_log')
+ORDER BY tablename, policyname;
+```
+
+### 3.8 Example queries you’ll actually run
+```sql
+-- newest files you uploaded (metadata only)
+SELECT id, s3_key, filename, mime, bytes, uploaded_at
+FROM raw_docs
+ORDER BY uploaded_at DESC
+LIMIT 10;
+
+-- latest invoices with vendor and totals
+SELECT v.name AS vendor, i.invoice_no, i.invoice_date, i.currency, i.total
+FROM invoices i
+JOIN vendors v ON v.id = i.vendor_id
+ORDER BY i.invoice_date DESC
+LIMIT 20;
+
+-- invoice + lines (detail view)
+SELECT i.invoice_no, il.sku, il."desc", il.qty, il.unit_price, il.line_total
+FROM invoice_lines il
+JOIN invoices i ON i.id = il.invoice_id
+WHERE i.invoice_no = 'INV-12345';
+```
+
+### 3.9 FAQ
+- **Is MinIO a database?** No. It stores the **files** (PDF bytes). Postgres stores **metadata + parsed facts**. They’re linked by `raw_docs.s3_key`.
+- **Where do date/currency/total live?** In `invoices` (header) and `invoice_lines` (details). `raw_docs` knows file info only.
+- **Can we switch to AWS S3 later?** Yes. We keep to the S3 API and store `bucket + s3_key` in DB; switching is mostly env + data sync.
+
+
 
 ---
 
