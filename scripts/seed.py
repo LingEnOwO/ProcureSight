@@ -210,6 +210,37 @@ $body$;
 """
 with psycopg.connect(DATABASE_URL) as conn:
     with conn.cursor() as cur:
+        # Apply DDL
         cur.execute(ddl)
         conn.commit()
-print("v0 schema created")
+
+        # --- Bootstrap demo data (idempotent) ---
+        # 1) Demo Org
+        cur.execute(
+            "INSERT INTO orgs (name) VALUES (%s) "
+            "ON CONFLICT (name) DO NOTHING RETURNING id",
+            ("Demo Org",),
+        )
+        row = cur.fetchone()
+        if row is None:
+            cur.execute("SELECT id FROM orgs WHERE name=%s", ("Demo Org",))
+            row = cur.fetchone()
+        demo_org_id = row[0]
+
+        # 2) Demo Uploader user
+        cur.execute(
+            "INSERT INTO users (org_id, email, role) VALUES (%s, %s, %s) "
+            "ON CONFLICT (email) DO NOTHING RETURNING id",
+            (demo_org_id, "uploader@demo.local", "admin"),
+        )
+        row = cur.fetchone()
+        if row is None:
+            cur.execute("SELECT id FROM users WHERE email=%s", ("uploader@demo.local",))
+            row = cur.fetchone()
+        demo_user_id = row[0]
+
+        conn.commit()
+
+        print("v0 schema created")
+        print(f"DEMO_ORG_ID={demo_org_id}")
+        print(f"DEMO_UPLOADER_ID={demo_user_id}")
