@@ -2,7 +2,7 @@
   "name": "procuresight",
   "private": true,
   "scripts": {
-    "web:test": "pnpm --filter ./apps/web vitest",
+    "web:test": "pnpm --filter ./apps/web test",
     "web:dev": "pnpm --filter ./apps/web dev"
   }
 }
