@@ -3,12 +3,13 @@ from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
 from typing import List
 import mimetypes
+import hashlib
 from dotenv import load_dotenv
 import asyncio, json
 from starlette.responses import StreamingResponse
 
 # local helpers
-from .db import insert_raw_doc, db_ok
+from .db import insert_raw_doc, db_ok, get_raw_doc_by_hash
 from .storage import put_object, s3_ok
 
 load_dotenv(".env.local")
@@ -84,6 +85,20 @@ async def ingest(file: UploadFile = File(...), org_id: str | None = Form(None)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to read upload: {e}")
     
+    # Compute content hash for idempotency
+    digest = hashlib.sha256(data).hexdigest()
+
+    # Fast duplicate check (per org, by content hash) BEFORE touching S3
+    existing = get_raw_doc_by_hash(org_id=org, sha256=digest)
+    if existing:
+        # Do not upload again and do not insert another DB row.
+        # Optionally skip broadcast for duplicates to avoid noisy toasts.s
+        return {
+            "raw_doc_id": existing["id"],
+            "s3_key": existing["s3_key"],
+            "duplicate": True,
+        }
+    
     # Determine content type
     content_type = file.content_type or mimetypes.guess_type(file.filename)[0] or "application/octet-stream"
 
@@ -101,6 +116,7 @@ async def ingest(file: UploadFile = File(...), org_id: str | None = Form(None)):
             filename=file.filename,
             mime=content_type,
             byte_len=len(data),
+            sha256=digest,
             uploaded_by=settings.UPLOADER_ID,
         )
     except Exception as e:
@@ -111,7 +127,7 @@ async def ingest(file: UploadFile = File(...), org_id: str | None = Form(None)):
         "raw_doc_id": raw_doc_id,
         "s3_key": s3_key,
     })
-    return {"raw_doc_id": raw_doc_id, "s3_key": s3_key}
+    return {"raw_doc_id": raw_doc_id, "s3_key": s3_key, "duplicate": False}
 
 @app.get("/health", tags=["meta"])
 def health():

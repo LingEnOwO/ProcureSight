@@ -215,6 +215,15 @@ with psycopg.connect(DATABASE_URL) as conn:
         conn.commit()
 
         # --- Bootstrap demo data (idempotent) ---
+        # --- Add sha256 column and unique index for idempotent uploads ---
+        cur.execute("""
+        ALTER TABLE raw_docs
+        ADD COLUMN IF NOT EXISTS sha256 CHAR(64);
+        """)
+        cur.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS raw_docs_org_sha256_uidx
+        ON raw_docs (org_id, sha256);
+        """)
         # 1) Demo Org
         cur.execute(
             "INSERT INTO orgs (name) VALUES (%s) "
