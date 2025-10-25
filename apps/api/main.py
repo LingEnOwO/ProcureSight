@@ -4,6 +4,8 @@ from pydantic_settings import BaseSettings
 from typing import List
 import mimetypes
 from dotenv import load_dotenv
+import asyncio, json
+from starlette.responses import StreamingResponse
 
 # local helpers
 from .db import insert_raw_doc, db_ok
@@ -23,6 +25,54 @@ app = FastAPI(
     description="Contracts for invoices, vendors, and ingestion."
 )
 
+SUBSCRIBERS: set[asyncio.Queue] = set()
+
+async def broadcast(event: dict):
+    # Push event to all connected clients
+    msg = json.dumps(event)
+    dead = []
+    for q in list(SUBSCRIBERS):
+        try:
+            q.put_nowait(msg)
+        except Exception:
+            dead.append(q)
+    for q in dead:
+        SUBSCRIBERS.discard(q)
+
+@app.get("/events")
+async def sse_events():
+    """
+    Server-Sent Events stream.
+    - Sends JSON events as `data: {...}\n\n`
+    - Emits a keepalive comment every 15s so proxies don't time out.
+    """
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    SUBSCRIBERS.add(queue)
+
+    async def event_generator():
+        try:
+            # initial hello so clients know they're connected
+            yield "event: hello\ndata: {}\n\n"
+            while True:
+                try:
+                    # wait up to 15s for a real event
+                    msg = await asyncio.wait_for(queue.get(), timeout=15)
+                    yield f"data: {msg}\n\n"
+                except asyncio.TimeoutError:
+                    # keppalive (comment line per SSE spec)
+                    yield ": ping\n\n"
+        except asyncio.CancelledError:
+            # client disconnected
+            pass
+        finally:
+            SUBSCRIBERS.discard(queue)
+    return StreamingResponse(event_generator(),
+                             media_type = "text/event-stream",
+                             headers={
+                                 "Cache-Control": "no-cache",
+                                 "Connection": "keep-alive",
+                             })
+            
 # Ingestion
 @app.post("/api/ingest", tags=["ingestion"])
 async def ingest(file: UploadFile = File(...), org_id: str | None = Form(None)):
@@ -56,6 +106,11 @@ async def ingest(file: UploadFile = File(...), org_id: str | None = Form(None)):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"DB insert failed: {e}")
 
+    await broadcast({
+        "type": "upload_received",
+        "raw_doc_id": raw_doc_id,
+        "s3_key": s3_key,
+    })
     return {"raw_doc_id": raw_doc_id, "s3_key": s3_key}
 
 @app.get("/health", tags=["meta"])
