@@ -1,0 +1,9 @@
+{
+  "name": "@procuresight/types",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "api.d.ts",
+  "types": "api.d.ts",
+  "files": ["api.d.ts", "openapi.json"]
+}
