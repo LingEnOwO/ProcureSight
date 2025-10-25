@@ -654,16 +654,151 @@ WHERE i.invoice_no = 'INV-12345';
 
 ## 4) Ingestion pipeline (v0 → v1)
 
-- **Upload UI**: drag‑and‑drop → POST `/api/ingest`
-- **Storage**: stream to S3/MinIO; store metadata in `raw_docs`
-- **Event**: enqueue extraction job (simple queue or Temporal/Airflow later)
-- **SSE toast**: client subscribes to `/events` for "processed" updates
+> Turn uploads into durable records: **UI → /api/ingest → MinIO → raw_docs → events (next).**
 
-**v1 Enhancements**
+### Goal
+Turn uploads into durable, queryable records and notify clients in real time, with idempotent behavior for repeated uploads.
 
-- Virus scan stub (hash check)
-- Idempotency keys (same file upload doesn’t duplicate work)
-- Backfill script: iterate `raw_docs` and re‑run extraction
+**Checklist**
+- [x] Can upload from a client and receive `200 OK` with a `raw_doc_id`.
+- [x] Object appears in MinIO with the expected key; a new `raw_docs` row points to it.
+- [x] An SSE message arrives to clients listening on `/events` (e.g., `upload_received` with `raw_doc_id`).
+- [x] Re-running the same upload (exact same bytes) is blocked/marked as duplicate using SHA‑256; returns the original `raw_doc_id`/`s3_key` with `"duplicate": true` (no new S3 object, no new DB row).
+
+---
+
+### Endpoint contract (v0)
+- **POST** `/api/ingest`
+  - **Body**: `multipart/form-data`
+    - `file` (required): the file to upload
+    - `org_id` (optional): overrides default org from env
+  - **Response 200**:
+    ```json
+        { "raw_doc_id": <int>, "s3_key": "org/<org-uuid>/uploads/<uuid>/<filename>", "duplicate": <bool> }
+    ```
+  - When `"duplicate": true`, the response refers to an existing row/object; the server skips re-uploading to S3 and skips inserting a new `raw_docs` row.
+- **Side effects**
+  - **S3/MinIO**: store bytes under `org/<org_id>/uploads/<uuid>/<filename>`
+  - **Postgres** (`raw_docs`): insert `(org_id, s3_key, filename, mime, bytes, uploaded_by)`
+  - **RLS context**: API sets `SET LOCAL app.org_id = :org_id` and, if present, `SET LOCAL app.actor_id = :uploaded_by` prior to `INSERT` so policies pass.
+  - **Idempotency**: compute `sha256` of the uploaded bytes; if `(org_id, sha256)` already exists in `raw_docs`, short-circuit and return the existing row with `"duplicate": true`.
+
+### Environment & bootstrap
+- `.env.local` (host‑run) must include:
+  ```
+  DATABASE_URL=postgresql://procure:procure@localhost:5432/procuresight
+  S3_ENDPOINT=http://localhost:9000
+  S3_ACCESS_KEY=minioadmin
+  S3_SECRET_KEY=minioadmin
+  S3_BUCKET=procuresight
+  ORG_ID=<uuid>          # from seed output
+  UPLOADER_ID=<uuid>     # from seed output (optional if schema allows NULL)
+  ```
+  **No angle brackets** around actual values (write bare UUIDs).
+- `scripts/seed.py` bootstraps **Demo Org** and **Demo Uploader** idempotently and prints:
+  ```
+  DEMO_ORG_ID=<uuid>
+  DEMO_UPLOADER_ID=<uuid>
+  ```
+- MinIO bucket **must exist** (name = `S3_BUCKET`). Create via console (`http://localhost:9001`) or:
+  ```
+  export AWS_ACCESS_KEY_ID=minioadmin
+  export AWS_SECRET_ACCESS_KEY=minioadmin
+  aws --endpoint-url http://localhost:9000 s3 mb s3://procuresight
+  ```
+
+### Verification recipe (repeatable)
+1. **Health**
+   ```
+   curl -s http://localhost:8000/health | jq
+   # → {"ok":true,"db":true,"s3":true}
+   ```
+2. **Upload**
+   ```
+   curl -s -X POST http://localhost:8000/api/ingest \
+     -F "file=@data/samples/invoices_pdf/INV-01-202509-0001.pdf" | jq
+   # → { "raw_doc_id": N, "s3_key": "org/<ORG_ID>/uploads/<uuid>/INV-01-202509-0001.pdf" }
+   ```
+3. **DB row (RLS aware)**
+   ```sql
+   SET app.org_id = '<ORG_ID>';
+   SELECT id, filename, mime, bytes, s3_key
+   FROM raw_docs ORDER BY id DESC LIMIT 5;
+   ```
+4. **S3 object**
+   ```
+   aws --endpoint-url http://localhost:9000 s3 ls s3://procuresight/org/<ORG_ID>/uploads/ --recursive
+   ```
+
+### Real-time updates via SSE (what & why)
+
+**What is SSE?** Server‑Sent Events keep a single HTTP connection open so the API can *push* small JSON messages to the browser, instead of the UI *polling* every few seconds. This makes the app feel instant (upload received, extraction done, alert created).
+
+**Why here?** Right after an upload succeeds, the API can notify the UI immediately:
+- `upload_received` (v0 now) → show a toast and update “Recent uploads”
+- `doc_processed` (v1) → extraction finished, link to parsed invoice
+- `alert_created` (v1) → anomaly detected, link to alert
+
+**Endpoint (dev):**  
+- **GET** `/events` → `text/event-stream` (SSE)
+- Sends keep‑alive `: ping` comments every 15s to prevent idle timeouts.
+
+**Event format (each line block ends with a blank line):**
+```
+data: {"type":"upload_received","raw_doc_id":123,"s3_key":"org/<ORG_ID>/uploads/<uuid>/<filename>"}
+
+```
+
+**Minimal browser client (works in Next.js/vanilla):**
+```ts
+const es = new EventSource("http://localhost:8000/events");
+es.onmessage = (ev) => {
+  const msg = JSON.parse(ev.data);
+  if (msg.type === "upload_received") {
+    // show toast, refresh uploads table, etc.
+    console.log("Upload received:", msg.raw_doc_id);
+  }
+};
+```
+
+**Flow sketch**
+```
+Client ──POST /api/ingest──▶ API ──put_object──▶ MinIO
+          ▲                         │
+          │                         └─INSERT raw_docs (RLS set)
+          └───────◀──SSE /events──── broadcast {"type":"upload_received", raw_doc_id}
+```
+
+**Future evolution (beyond in‑process SSE)**
+
+- **Near‑term (v1.5): Redis Pub/Sub (same client contract).** Replace the in‑process `SUBSCRIBERS` set with Redis channels.  
+  - Producer: `/api/ingest` publishes `upload_received` to `events:<org_id>`.  
+  - Consumer: `/events` subscribes to `events:<org_id>` and streams messages.  
+  - Why: supports multiple API instances with minimal code change. `/events` stays the same for the web app.
+- **Mid‑term (v2): Separate “work queue” from “notify bus.”**  
+  - **Durable jobs** (retries/DLQ): Celery/RQ/Arq or Redis Streams for extraction, validation, etc.  
+  - **Ephemeral fan‑out** (UI toasts): Redis Pub/Sub for `upload_received`, `doc_processed`, `alert_created`.
+- **Long‑term (v3): Durable event log.** Use Kafka/Pulsar/NATS JetStream for organization‑wide events and replay/audit. Keep `/events` as a thin gateway (SSE/WebSocket) that reads from the durable log.
+- **Scale considerations:**  
+  - AuthN on `/events` (JWT) + org‑scoped channels.  
+  - Per‑client buffer cap to handle slow consumers.  
+  - Metrics: connected clients, publish latency, dropped messages.
+
+### Troubleshooting
+- **`invalid input syntax for type uuid: "<…>"`** → `.env.local` contains angle brackets; use bare UUIDs.
+- **`NoSuchBucket`** on upload → create the bucket named in `S3_BUCKET` first.
+- **Health `db:false` or `s3:false`** → verify Docker services (`make up`) and env values.
+- **Inserted file not visible in `SELECT`** → RLS requires `SET app.org_id = '<ORG_ID>'` for your psql session.
+- **Writes blocked by RLS** → ensure API sets `SET LOCAL app.org_id` (and `app.actor_id`) before `INSERT` (already implemented).
+- **DB vs API mismatch** → confirm both use the same `DATABASE_URL` (host `localhost`, not `db`, for host‑run API).
+
+### v1 Enhancements (next)
+- **Idempotency**: compute `sha256` on upload; if `(org_id, sha256)` exists in `raw_docs`, return existing `raw_doc_id` (no duplicate work).
+- **SSE**: broadcast `upload_received` (v0) and `doc_processed` (post‑extraction) on `/events` for the UI.
+- **Queue**: enqueue extraction job (Celery/RQ/Temporal placeholder).
+- **Virus scan stub**: blocklisted hash list before persisting.
+- **Backfill**: CLI to iterate `raw_docs` and re‑run extraction.
+- **Orphan cleanup**: if S3 upload succeeds but DB insert fails, mark/delete orphan objects (dev utility).
 
 ---
 
