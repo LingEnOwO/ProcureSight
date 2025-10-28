@@ -34,7 +34,6 @@ CREATE TABLE IF NOT EXISTS vendors (
 );
 
 -- === Ingestion metadata ===
--- Raw documents (uploaded files)
 CREATE TABLE IF NOT EXISTS raw_docs (
   id BIGSERIAL PRIMARY KEY,
   org_id UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
@@ -42,13 +41,15 @@ CREATE TABLE IF NOT EXISTS raw_docs (
   filename TEXT NOT NULL,
   mime TEXT,
   bytes BIGINT,
+  sha256 CHAR(64) NOT NULL,
   uploaded_by UUID REFERENCES users(id) ON DELETE SET NULL,
-  uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT raw_docs_sha256_hex CHECK (sha256 ~ '^[0-9a-f]{64}$')
 );
 
--- Compatibility: add org_id to raw_docs if the table pre-existed without it
-ALTER TABLE raw_docs
-  ADD COLUMN IF NOT EXISTS org_id UUID REFERENCES orgs(id) ON DELETE CASCADE;
+-- Uniqueness-per-org to prevent re-uploading the same file
+CREATE UNIQUE INDEX IF NOT EXISTS raw_docs_org_sha256_uidx
+  ON raw_docs (org_id, sha256);
 
 -- Extractions (structured results from a raw_doc)
 CREATE TABLE IF NOT EXISTS extractions (
@@ -214,16 +215,6 @@ with psycopg.connect(DATABASE_URL) as conn:
         cur.execute(ddl)
         conn.commit()
 
-        # --- Bootstrap demo data (idempotent) ---
-        # --- Add sha256 column and unique index for idempotent uploads ---
-        cur.execute("""
-        ALTER TABLE raw_docs
-        ADD COLUMN IF NOT EXISTS sha256 CHAR(64);
-        """)
-        cur.execute("""
-        CREATE UNIQUE INDEX IF NOT EXISTS raw_docs_org_sha256_uidx
-        ON raw_docs (org_id, sha256);
-        """)
         # 1) Demo Org
         cur.execute(
             "INSERT INTO orgs (name) VALUES (%s) "
