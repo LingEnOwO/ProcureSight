@@ -94,7 +94,7 @@ class Invoice:
     subtotal: float
     tax: float
     total: float
-    line_items: List[LineItem]
+    lines: List[LineItem]
 
 
 def ensure_dir(path: Path) -> None:
@@ -155,13 +155,13 @@ def build_invoice(rng: Random, fake: Faker, vendor: str, vendor_index: int, idx:
         subtotal=float(f"{subtotal:.2f}") if isinstance(subtotal, float) else subtotal,
         tax=tax,
         total=total,
-        line_items=items,
+        lines=items,
     )
 
     # Sometimes insert a credit line (negative) as an edge case
     if rng.random() < 0.08:
         credit = LineItem(sku="CREDIT", desc="Promotional credit", qty=1, unit_price=-round(rng.uniform(5, 25), 2))
-        inv.line_items.append(credit)
+        inv.lines.append(credit)
         inv.subtotal = round(inv.subtotal + credit.line_total, 2)
         inv.total = round(inv.subtotal + inv.tax, 2)
 
@@ -174,16 +174,16 @@ def maybe_duplicate_invoice(rng: Random, inv: Invoice) -> Invoice:
     # objects so that edits to the duplicate do not modify the original invoice.
     dup = replace(
         inv,
-        line_items=[LineItem(li.sku, li.desc, li.qty, li.unit_price) for li in inv.line_items],
+        lines=[LineItem(li.sku, li.desc, li.qty, li.unit_price) for li in inv.lines],
     )
 
     # Tiny change to one line to simulate near-duplicate / correction
-    if dup.line_items:
-        i = rng.randrange(len(dup.line_items))
-        li = dup.line_items[i]
+    if dup.lines:
+        i = rng.randrange(len(dup.lines))
+        li = dup.lines[i]
         li.unit_price = round(li.unit_price * (1.0 + (rng.random() - 0.5) * 0.02), 2)  # ±1%
 
-    dup.subtotal = round(sum(li.line_total for li in dup.line_items), 2)
+    dup.subtotal = round(sum(li.line_total for li in dup.lines), 2)
     dup.total = round(dup.subtotal + dup.tax, 2)
     return dup
 
@@ -205,7 +205,7 @@ def write_csv(out_dir: Path, invoices: List[Invoice]) -> None:
         w = csv.writer(f)
         w.writerow(["invoice_no", "sku", "desc", "qty", "unit_price", "line_total"])
         for inv in invoices:
-            for li in inv.line_items:
+            for li in inv.lines:
                 w.writerow([inv.invoice_no, li.sku, li.desc, li.qty, f"{li.unit_price:.2f}", f"{li.line_total:.2f}"])
 
 
@@ -221,7 +221,7 @@ def write_json(out_dir: Path, invoices: List[Invoice]) -> None:
             "subtotal": round(inv.subtotal, 2),
             "tax": round(inv.tax, 2),
             "total": round(inv.total, 2),
-            "line_items": [
+            "lines": [
                 {
                     "sku": li.sku,
                     "desc": li.desc,
@@ -229,7 +229,7 @@ def write_json(out_dir: Path, invoices: List[Invoice]) -> None:
                     "unit_price": round(li.unit_price, 2),
                     "line_total": round(li.line_total, 2),
                 }
-                for li in inv.line_items
+                for li in inv.lines
             ],
         }
         with open(path, "w", encoding="utf-8") as f:
@@ -265,7 +265,7 @@ def draw_pdf_invoice(path: Path, inv: Invoice) -> None:
     y -= 0.1*inch
 
     c.setFont("Helvetica", 10)
-    for li in inv.line_items:
+    for li in inv.lines:
         if y < 1.5*inch:
             c.showPage()
             y = height - 1*inch
