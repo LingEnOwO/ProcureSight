@@ -3,7 +3,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException
 from psycopg import connect
 from pydantic import ValidationError
 from ..repos.invoices import ensure_vendor, upsert_invoice, replace_lines
-from ..services.structured_extract import parse_csv_bytes, parse_json_bytes
+from ..services.structured_extract import parse_csv_bytes, parse_json_bytes, assemble_invoice_from_rows, assemble_invoices_from_rows
 from ..models.invoice import Invoice
 from ..settings import settings
 
@@ -30,10 +30,24 @@ def extract_structured(file: UploadFile = File(...), raw_doc_id: int | None = No
     try:
         content = file.file.read()
         if file.content_type in ("text/csv", "application/vnd.ms-excel") or file.filename.endswith(".csv"):
-            # Expect a single-invoice JSON summary alongside (recommended), or a single invoice per file.
-            # For v0, assume the file is already a JSON with header+lines. If truly CSV,
-            # you can pre-convert to JSON using your script.
-            raise HTTPException(415, "CSV-to-JSON denormalization not implemented in endpoint v0")
+            rows = list(parse_csv_bytes(content))
+            docs = assemble_invoices_from_rows(rows)
+            invoices = []
+            try:
+                for doc in docs:
+                    inv = Invoice(**doc)
+                    invoices.append(inv)
+            except ValidationError as ve:
+                raise HTTPException(status_code=422, detail=ve.errors())
+
+            with conn:
+                invoice_ids = []
+                for inv in invoices:
+                    vendor_id = ensure_vendor(conn, org_id, inv.vendor)
+                    invoice_id = upsert_invoice(conn, org_id, vendor_id, inv.dict(), raw_doc_id)
+                    replace_lines(conn, invoice_id, [ln.dict() for ln in inv.lines])
+                    invoice_ids.append(invoice_id)
+            return {"ok": True, "invoice_ids": invoice_ids}
 
         elif file.content_type == "application/json" or file.filename.endswith(".json"):
             doc = parse_json_bytes(content)

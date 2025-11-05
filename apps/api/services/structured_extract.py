@@ -25,6 +25,50 @@ def _normalize_header(h: str) -> str:
             return key
     return h # allow lines columns to pass through (sku, desc, qty, unit_price, line_total)
 
+def assemble_invoices_from_rows(rows: list[dict]) -> list[dict]:
+    """Group CSV rows by invoice_no into a list of invoice-level dicts."""
+    if not rows:
+        raise ValueError("CSV file contained no rows")
+
+    grouped: dict[str, list[dict]] = {}
+    for row in rows:
+        invoice_no = row.get("invoice_no")
+        if not invoice_no:
+            raise ValueError("CSV row missing required invoice_no field")
+        grouped.setdefault(invoice_no, []).append(row)
+
+    invoices = []
+    for invoice_no, inv_rows in grouped.items():
+        header = inv_rows[0]
+        invoice = {
+            "invoice_no": header.get("invoice_no"),
+            "vendor": header.get("vendor"),
+            "invoice_date": header.get("invoice_date"),
+            "due_date": header.get("due_date"),
+            "currency": header.get("currency"),
+            "subtotal": header.get("subtotal"),
+            "tax": header.get("tax"),
+            "total": header.get("total"),
+            "lines": [],
+        }
+        for row in inv_rows:
+            line = {
+                "sku": row.get("sku"),
+                "desc": row.get("desc"),
+                "qty": float(row.get("qty") or 0),
+                "unit_price": float(row.get("unit_price") or 0),
+                "line_total": float(row.get("line_total") or 0),
+            }
+            invoice["lines"].append(line)
+        invoices.append(invoice)
+
+    return invoices
+
+def assemble_invoice_from_rows(rows: list[dict]) -> dict:
+    invoices = assemble_invoices_from_rows(rows)
+    # for v0 callers that assume single-invoice CSVs
+    return invoices[0]
+
 def parse_csv_bytes(b: bytes) -> Iterable[dict]:
     text = b.decode("utf-8", errors="replace")
     rdr = csv.DictReader(io.StringIO(text))
