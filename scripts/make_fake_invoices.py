@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 make_fake_invoices.py
 
@@ -189,24 +188,48 @@ def maybe_duplicate_invoice(rng: Random, inv: Invoice) -> Invoice:
 
 
 def write_csv(out_dir: Path, invoices: List[Invoice]) -> None:
+    """
+    Write a single flat combined CSV where each row represents a line item,
+    and invoice-level fields are repeated per row.
+    """
     ensure_dir(out_dir)
-    inv_path = out_dir / "invoices.csv"
-    line_path = out_dir / "invoice_lines.csv"
-
-    # invoices.csv
-    with open(inv_path, "w", newline="", encoding="utf-8") as f:
+    combined_path = out_dir / "invoices.csv"
+    with open(combined_path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["invoice_no", "vendor", "date", "currency", "subtotal", "tax", "total"])
-        for inv in invoices:
-            w.writerow([inv.invoice_no, inv.vendor, inv.date, inv.currency, f"{inv.subtotal:.2f}", f"{inv.tax:.2f}", f"{inv.total:.2f}"])
-
-    # invoice_lines.csv
-    with open(line_path, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow(["invoice_no", "sku", "desc", "qty", "unit_price", "line_total"])
+        w.writerow(
+            [
+                "invoice_no",
+                "vendor",
+                "date",
+                "currency",
+                "subtotal",
+                "tax",
+                "total",
+                "sku",
+                "desc",
+                "qty",
+                "unit_price",
+                "line_total",
+            ]
+        )
         for inv in invoices:
             for li in inv.lines:
-                w.writerow([inv.invoice_no, li.sku, li.desc, li.qty, f"{li.unit_price:.2f}", f"{li.line_total:.2f}"])
+                w.writerow(
+                    [
+                        inv.invoice_no,
+                        inv.vendor,
+                        inv.date,
+                        inv.currency,
+                        f"{inv.subtotal:.2f}",
+                        f"{inv.tax:.2f}",
+                        f"{inv.total:.2f}",
+                        li.sku,
+                        li.desc,
+                        li.qty,
+                        f"{li.unit_price:.2f}",
+                        f"{li.line_total:.2f}",
+                    ]
+                )
 
 
 def write_json(out_dir: Path, invoices: List[Invoice]) -> None:
@@ -392,7 +415,7 @@ def main() -> None:
     # Write outputs
     if args.csv:
         write_csv(args.csv, invoices)
-        print(f"[ok] Wrote CSV to {args.csv}/invoices.csv and {args.csv}/invoice_lines.csv")
+        print(f"[ok] Wrote combined invoice CSV to {args.csv}/invoices.csv")
 
     if args.json:
         write_json(args.json, invoices)
