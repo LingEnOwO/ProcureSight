@@ -1,6 +1,7 @@
 from typing import List
 from ..models.invoice import Invoice
 from ..models.validation import ValidationIssue ,ValidationReport
+from collections import defaultdict
 
 # Tolerances (in invoice currency units, typically dollars)
 LINE_TOLERANCE = 0.02   # up to 2 cents rounding difference is acceptable as warning
@@ -152,3 +153,61 @@ def validate_invoice(inv: Invoice) -> ValidationReport:
         warnings=warnings,
         normalized_invoice=norm_inv,
     )
+
+# Confidence helpers 
+# Penalty applied per warning when computing overall invoice confidence.
+WARNING_PENALTY = 0.05
+# Lower bound for confidence when there are only warnings (no hard errors).
+MIN_CONFIDENCE_WITH_WARNINGS = 0.5
+
+
+def compute_invoice_confidence(report: ValidationReport) -> float:
+    """Compute a simple overall confidence score for an invoice.
+
+    - If there are any hard errors, confidence is 0.0.
+    - Otherwise, start from 1.0 and subtract a small penalty per warning,
+      bounded below by MIN_CONFIDENCE_WITH_WARNINGS.
+    """
+    if report.has_errors:
+        return 0.0
+
+    score = 1.0 - WARNING_PENALTY * len(report.warnings)
+    # Clamp between MIN_CONFIDENCE_WITH_WARNINGS and 1.0
+    if score < MIN_CONFIDENCE_WITH_WARNINGS:
+        score = MIN_CONFIDENCE_WITH_WARNINGS
+    if score > 1.0:
+        score = 1.0
+    return score
+
+
+def compute_field_confidence(report: ValidationReport) -> dict[str, float]:
+    """Compute per-field confidence scores based on validation issues.
+
+    Fields with no issues start at 1.0.
+    - Warnings lower confidence for that field (e.g. rounding adjustments).
+    - Errors drop confidence for that field to 0.0.
+    """
+    confidences: dict[str, float] = defaultdict(lambda: 1.0)
+
+    # Apply warnings first
+    for issue in report.warnings:
+        confidences[issue.field] -= 0.05
+        if confidences[issue.field] < 0.5:
+            confidences[issue.field] = 0.5
+
+    # Apply errors (strongest signal)
+    for issue in report.errors:
+        confidences[issue.field] = 0.0
+
+    return dict(confidences)
+
+
+def needs_review(report: ValidationReport, threshold: float = 0.9) -> bool:
+    """Return True if the invoice should be sent to a review queue.
+
+    By default, any invoice with errors or with an overall confidence below
+    `threshold` is considered to need review.
+    """
+    if report.has_errors:
+        return True
+    return compute_invoice_confidence(report) < threshold
