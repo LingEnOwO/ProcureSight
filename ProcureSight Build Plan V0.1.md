@@ -804,17 +804,48 @@ Client ──POST /api/ingest──▶ API ──put_object──▶ MinIO
 
 ## 5) Extraction (structured + unstructured)
 
-- **Structured (CSV/JSON)**: pydantic models → write straight into `invoices`/`invoice_lines`
-- **Unstructured (PDF)**: OCR (Tesseract or Textract) → text blocks → LLM prompt for entity extraction
-- **Validation**: schema + totals reconciliation (sum(lines) ≈ total ± tolerance)
-- **Confidence**: per‑field confidence; low confidence → review queue UI
+> Current scope: structured CSV/JSON + text-based PDFs using LLM extraction. OCR for scanned/image PDFs will be added later.
+
+- **Structured (CSV/JSON)**: `Invoice` / `InvoiceLine` Pydantic models → validation → write into `invoices` / `invoice_lines`.
+- **Validation**: schema checks + business rules (per-line math, subtotal vs. sum of lines, total vs. subtotal + tax, with rounding tolerance).
+- **Confidence**: invoice-level and per-field confidence scores computed from validation results; low confidence is flagged for review in the UI later.
+- **Unstructured (text-based PDF)**: extract text from PDF pages (via `pdfplumber`) → LLM prompt for entity extraction into `Invoice`-shaped JSON. OCR for image-only/scanned PDFs will be added in a future iteration.
+
+**Endpoints (v0.1)**
+
+- `POST /extract/structured`
+  - Accepts **JSON** or **CSV** uploads.
+  - JSON path: expects an `Invoice`-shaped document, validates it, computes confidence, and upserts into `invoices` / `invoice_lines`.
+  - CSV path: parses rows into `Invoice` objects, runs the same validation + confidence logic, and persists multiple invoices in one call.
+
+- `POST /extract/unstructured`
+  - Accepts **text-based PDF** uploads.
+  - Pipeline: PDF bytes → text extraction (`pdfplumber`) → LLM extraction to `Invoice` JSON → validation + confidence → write to `invoices` / `invoice_lines`.
+  - Returns the new `invoice_id` plus warnings, confidence scores, and a `needs_review` flag derived from validation.
 
 **LLM prompt template (sketch)**
 
 ```
-Extract: vendor, invoice_no, date, currency, line_items[{desc, qty, unit_price, line_total}].
-Return strict JSON matching this schema: …
+Extract: vendor, invoice_no, invoice_date, due_date, currency,
+subtotal, tax, total, and line items [{ sku, desc, qty, unit_price, line_total }].
+Return strict JSON matching this schema.
 ```
+
+### Potential Improvements (v1.5+)
+
+- **Schema validation + versioning** — Store each extraction with a version tag (`ocr_engine`, `prompt_hash`, `model_name`) and validate LLM output with Pydantic before inserting into `invoices`.
+- **Vendor resolution** — Use fuzzy/canonical name mapping to ensure consistent vendor IDs (e.g., “Apex Office Supply” vs “Apex Office Supplies”).
+- **Human-in-the-loop review UI** — Display PDFs side-by-side with parsed JSON for low-confidence fields; allow inline edits and save to `audit_log`.
+- **Pre-checks (before extract)** — MIME/type validation, file size/page limit, virus scan, skip encrypted PDFs, and route image-only PDFs through OCR.
+- **Structured data normalization** — Header aliasing, type coercion, ISO 4217 currency normalization.
+- **Model/versioning detail** — Store raw OCR text and parsed JSON with extraction metadata for reproducibility.
+- **LLM guardrails** — Strict JSON schema validation, deterministic prompts, and regex fallback for essential fields.
+- **Retry & idempotency** — Key retries by `raw_doc_id`; retry only transient OCR/LLM errors.
+- **Line-item robustness** — Multi-page table detection and rounding consistency.
+- **Confidence math** — Combine OCR and heuristic confidences for better scoring.
+- **Metrics & alerts** — Track extraction success rate, latency, and alert on spikes or failures.
+- **Re-extract tooling** — CLI for re-running OCR/LLM on subsets of documents.
+- **Privacy & cost** — Redact PII, cache OCR outputs, and chunk long docs for efficiency.
 
 ---
 
