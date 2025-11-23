@@ -64,10 +64,10 @@ def assemble_invoices_from_rows(rows: list[dict]) -> list[dict]:
 
     return invoices
 
-def assemble_invoice_from_rows(rows: list[dict]) -> dict:
+"""def assemble_invoice_from_rows(rows: list[dict]) -> dict:
     invoices = assemble_invoices_from_rows(rows)
     # for v0 callers that assume single-invoice CSVs
-    return invoices[0]
+    return invoices[0]"""
 
 def parse_csv_bytes(b: bytes) -> Iterable[dict]:
     text = b.decode("utf-8", errors="replace")
