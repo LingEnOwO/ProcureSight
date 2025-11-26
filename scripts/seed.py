@@ -91,16 +91,50 @@ CREATE TABLE IF NOT EXISTS invoice_lines (
   line_total NUMERIC(18,2)
 );
 
+-- === Analytics views ===
+-- Per-vendor unit price statistics per SKU/description
+CREATE OR REPLACE VIEW vendor_unit_price_stats AS
+SELECT
+  i.org_id,
+  i.vendor_id,
+  il.sku,
+  il."desc",
+  COUNT(*) AS sample_size,
+  percentile_cont(0.5) WITHIN GROUP (ORDER BY il.unit_price) AS median_unit_price,
+  AVG(il.unit_price) AS mean_unit_price
+FROM invoices i
+JOIN invoice_lines il ON il.invoice_id = i.id
+WHERE il.unit_price IS NOT NULL
+GROUP BY i.org_id, i.vendor_id, il.sku, il."desc";
+
+-- Per-vendor historical spend and invoice counts over recent windows
+CREATE OR REPLACE VIEW vendor_spend_stats AS
+SELECT
+  org_id,
+  vendor_id,
+  -- Last 30 days
+  COUNT(*) FILTER (WHERE invoice_date >= current_date - INTERVAL '30 days') AS invoice_count_30d,
+  COALESCE(SUM(total) FILTER (WHERE invoice_date >= current_date - INTERVAL '30 days'), 0) AS total_spend_30d,
+  -- Last 90 days
+  COUNT(*) FILTER (WHERE invoice_date >= current_date - INTERVAL '90 days') AS invoice_count_90d,
+  COALESCE(SUM(total) FILTER (WHERE invoice_date >= current_date - INTERVAL '90 days'), 0) AS total_spend_90d
+FROM invoices
+GROUP BY org_id, vendor_id;
+
+
 -- === Alerts & auditing ===
 -- Alerts (anomalies, warnings)
 CREATE TABLE IF NOT EXISTS alerts (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   org_id UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  vendor_id UUID REFERENCES vendors(id) ON DELETE SET NULL,
   invoice_id UUID REFERENCES invoices(id) ON DELETE SET NULL,
   type TEXT NOT NULL,
   severity TEXT,
   message TEXT,
   meta_json JSONB,
+  acknowledged_at TIMESTAMPTZ,
+  acknowledged_by UUID REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   resolved BOOLEAN NOT NULL DEFAULT FALSE
 );
@@ -108,6 +142,11 @@ CREATE TABLE IF NOT EXISTS alerts (
 -- Partial index for quick unread counts by severity
 CREATE INDEX IF NOT EXISTS idx_alerts_severity_unresolved
   ON alerts (severity)
+  WHERE resolved = FALSE;
+
+-- Index for unresolved alerts per org ordered by recency
+CREATE INDEX IF NOT EXISTS idx_alerts_org_created_unresolved
+  ON alerts (org_id, created_at DESC)
   WHERE resolved = FALSE;
 
 -- Audit log
