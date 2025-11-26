@@ -1,14 +1,8 @@
 from psycopg_pool import ConnectionPool
-import os
-from pydantic_settings import BaseSettings
 from psycopg import sql
-from dotenv import load_dotenv
 
-load_dotenv(".env.local")
-class Settings(BaseSettings):
-    DATABASE_URL: str
-    
-settings = Settings()
+from apps.api.settings import settings
+
 pool = ConnectionPool(conninfo=settings.DATABASE_URL, min_size=1, max_size=10)
 
 def get_raw_doc_by_hash(*, org_id: str, sha256: str):
