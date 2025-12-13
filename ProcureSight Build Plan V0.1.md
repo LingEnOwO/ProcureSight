@@ -856,6 +856,43 @@ Return strict JSON matching this schema.
 - **Alerts**: write to `alerts` and push to Slack via webhook
 - **Dashboard**: "Top anomalies" table with acknowledge/dismiss
 
+1. **Alerts data model + migrations**
+   - Ensure the `alerts` table exists with fields like: `id, org_id, invoice_id, vendor_id, type, severity, score, message, meta_json, status, created_at, acknowledged_at, acknowledged_by`.
+   - Add indexes for unresolved alerts and `(org_id, created_at)` to support dashboard queries.
+
+2. **Feature engineering on invoices**
+   - Compute per-vendor unit price stats (median/mean) per SKU/description.
+   - Compute historical spend and invoice counts per vendor (e.g., last 30–90 days).
+   - Store these aggregates in helper views or tables that scoring functions can query efficiently.
+
+3. **Rule-based anomaly checks (baseline scoring)**
+   - Flag large unit price deltas vs vendor median (for example, > 2–3x typical unit price).
+   - Detect potential duplicates (same `vendor_id + invoice_no` and/or same `vendor_id + total`).
+   - Flag sudden volume spikes where an invoice total is far above recent vendor averages.
+   - Implement as a function `score_invoice(invoice_id)` that returns a list of alert candidates.
+
+4. **Wire scoring into the pipeline / API**
+   - After extraction and validation write to `invoices` / `invoice_lines`, call `score_invoice(invoice_id)`.
+   - Insert the resulting alerts into `alerts`, respecting org-level RLS.
+   - Optionally expose `POST /score/invoice/{invoice_id}` to manually re-score an invoice for debugging.
+
+5. **Slack + SSE notifications**
+   - On creation of new open alerts, send a Slack message via webhook summarizing vendor, invoice_no, type, severity, and a link back to the app.
+   - Emit SSE `alert_created` events on `/events` so the web UI can show a toast and refresh alerts in real time.
+
+6. **Backend APIs for alert listing & update**
+   - `GET /alerts` with filters for `status`, `severity`, and pagination; always scoped to the current org.
+   - `PATCH /alerts/{id}` to acknowledge or dismiss alerts (update `status`, `acknowledged_at`, and `acknowledged_by`).
+
+7. **Dashboard "Top anomalies" table**
+   - Add a "Top anomalies" section to the Dashboard page driven by the alerts API.
+   - Include columns for vendor, invoice_no, type, severity/score, created_at, status, and actions (acknowledge/dismiss).
+   - Use SSE to live-update the table when `alert_created` events arrive.
+
+8. **Isolation Forest baseline (v1.1+)**
+   - Train an Isolation Forest model (scikit-learn) using engineered per-invoice features (e.g., normalized unit price deviations, spend vs baseline, invoice frequency).
+   - Store the continuous anomaly score in `alerts.score` or in a companion table and use it to rank alerts.
+   - Keep rule-based checks as the explainable backbone and layer ML scores on top for better prioritization.
 ---
 
 ## 7) Web app (MVP)
