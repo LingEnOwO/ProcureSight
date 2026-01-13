@@ -62,6 +62,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/invoices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Invoices */
+        get: operations["list_invoices_invoices_get"];
+        put?: never;
+        /** Create Invoices */
+        post: operations["create_invoices_invoices_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/invoices/{invoice_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Invoice */
+        get: operations["get_invoice_invoices__invoice_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Patch Invoice */
+        patch: operations["patch_invoice_invoices__invoice_id__patch"];
+        trace?: never;
+    };
     "/vendors": {
         parameters: {
             query?: never;
@@ -79,7 +115,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/invoices": {
+    "/vendors/{vendor_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Vendor By Id */
+        get: operations["get_vendor_by_id_vendors__vendor_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/extract/structured": {
         parameters: {
             query?: never;
             header?: never;
@@ -88,8 +141,30 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Create Invoices */
-        post: operations["create_invoices_invoices_post"];
+        /** Extract Structured */
+        post: operations["extract_structured_extract_structured_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/extract/unstructured": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Extract Unstructured
+         * @description Extract an invoice from an unstructured document (e.g., PDF) using
+         *     the unstructured extraction pipeline (PDF -> text -> LLM -> Invoice),
+         *     then run business validation and persist to the database.
+         */
+        post: operations["extract_unstructured_extract_unstructured_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -100,6 +175,22 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** Body_extract_structured_extract_structured_post */
+        Body_extract_structured_extract_structured_post: {
+            /**
+             * File
+             * Format: binary
+             */
+            file: string;
+        };
+        /** Body_extract_unstructured_extract_unstructured_post */
+        Body_extract_unstructured_extract_unstructured_post: {
+            /**
+             * File
+             * Format: binary
+             */
+            file: string;
+        };
         /** Body_ingest_api_ingest_post */
         Body_ingest_api_ingest_post: {
             /**
@@ -116,41 +207,99 @@ export interface components {
             detail?: components["schemas"]["ValidationError"][];
         };
         /** Invoice */
-        Invoice: {
-            /** Id */
-            id?: number | null;
-            /** Vendor Id */
-            vendor_id: number;
+        "Invoice-Input": {
+            /** Vendor */
+            vendor: string;
             /** Invoice No */
             invoice_no: string;
-            /** Date */
-            date: string;
+            /**
+             * Invoice Date
+             * Format: date
+             */
+            invoice_date: string;
             /** Currency */
             currency: string;
             /** Subtotal */
-            subtotal: number;
+            subtotal: number | string;
             /** Tax */
-            tax: number;
+            tax: number | string;
             /** Total */
-            total: number;
+            total: number | string;
+            /** Due Date */
+            due_date?: string | null;
+            /** Lines */
+            lines: components["schemas"]["InvoiceLine-Input"][];
+        };
+        /** Invoice */
+        "Invoice-Output": {
+            /** Vendor */
+            vendor: string;
+            /** Invoice No */
+            invoice_no: string;
             /**
-             * Lines
-             * @default []
+             * Invoice Date
+             * Format: date
              */
-            lines: components["schemas"]["InvoiceLine"][];
+            invoice_date: string;
+            /** Currency */
+            currency: string;
+            /** Subtotal */
+            subtotal: string;
+            /** Tax */
+            tax: string;
+            /** Total */
+            total: string;
+            /** Due Date */
+            due_date?: string | null;
+            /** Lines */
+            lines: components["schemas"]["InvoiceLine-Output"][];
         };
         /** InvoiceLine */
-        InvoiceLine: {
+        "InvoiceLine-Input": {
             /** Sku */
-            sku: string;
+            sku?: string | null;
             /** Desc */
             desc: string;
             /** Qty */
-            qty: number;
+            qty: number | string;
             /** Unit Price */
-            unit_price: number;
+            unit_price: number | string;
             /** Line Total */
-            line_total: number;
+            line_total: number | string;
+        };
+        /** InvoiceLine */
+        "InvoiceLine-Output": {
+            /** Sku */
+            sku?: string | null;
+            /** Desc */
+            desc: string;
+            /** Qty */
+            qty: string;
+            /** Unit Price */
+            unit_price: string;
+            /** Line Total */
+            line_total: string;
+        };
+        /** InvoicePatch */
+        InvoicePatch: {
+            /** Vendor Id */
+            vendor_id?: string | null;
+            /** Invoice No */
+            invoice_no?: string | null;
+            /** Invoice Date */
+            invoice_date?: string | null;
+            /** Due Date */
+            due_date?: string | null;
+            /** Currency */
+            currency?: string | null;
+            /** Subtotal */
+            subtotal?: number | null;
+            /** Tax */
+            tax?: number | null;
+            /** Total */
+            total?: number | null;
+            /** Lines */
+            lines?: components["schemas"]["InvoiceLine-Input"][] | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -165,11 +314,14 @@ export interface components {
         Vendor: {
             /**
              * Id
-             * @example 1
+             * Format: uuid
+             * @description Vendor UUID
+             * @example 98681ed3-d1e5-4440-b249-85f181f32b0e
              */
-            id: number;
+            id: string;
             /**
              * Name
+             * @description Display name of the vendor
              * @example Apex Office Supply
              */
             name: string;
@@ -256,9 +408,143 @@ export interface operations {
             };
         };
     };
-    list_vendors_vendors_get: {
+    list_invoices_invoices_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_invoices_invoices_post: {
         parameters: {
             query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Invoice-Input"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Invoice-Output"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_invoice_invoices__invoice_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                invoice_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_invoice_invoices__invoice_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                invoice_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InvoicePatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_vendors_vendors_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -274,18 +560,60 @@ export interface operations {
                     "application/json": components["schemas"]["Vendor"][];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
-    create_invoices_invoices_post: {
+    get_vendor_by_id_vendors__vendor_id__get: {
         parameters: {
             query?: never;
+            header?: never;
+            path: {
+                vendor_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Vendor"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    extract_structured_extract_structured_post: {
+        parameters: {
+            query?: {
+                raw_doc_id?: number | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["Invoice"];
+                "multipart/form-data": components["schemas"]["Body_extract_structured_extract_structured_post"];
             };
         };
         responses: {
@@ -295,7 +623,42 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Invoice"];
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    extract_unstructured_extract_unstructured_post: {
+        parameters: {
+            query?: {
+                raw_doc_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_extract_unstructured_extract_unstructured_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
