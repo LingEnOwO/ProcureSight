@@ -106,13 +106,13 @@ async def _score_unit_price_deltas_for_invoice(
     # All rows share the same header fields for a given invoice.
     header = rows[0]
     vendor_id = header["vendor_id"]
-    invoice_no = header.get("invoice_no")
+    invoice_no = header["invoice_no"]
 
     for row in rows:
         line_id = row["line_id"]
-        sku = row.get("sku")
-        desc = row.get("desc")
-        unit_price = row.get("unit_price")
+        sku = row["sku"]
+        desc = row["desc"]
+        unit_price = row["unit_price"]
 
         # Skip lines that don't have a meaningful price or SKU.
         if unit_price is None or sku is None:
@@ -130,12 +130,11 @@ async def _score_unit_price_deltas_for_invoice(
             # we can't do a "price vs median" comparison.
             continue
 
-        sample_size = baseline.get("sample_size") or 0
+        sample_size = (baseline["sample_size"] or 0)
         if sample_size < MIN_SAMPLE_SIZE_FOR_BASELINE:
             # Not enough history to trust the baseline.
             continue
-
-        median_price: Optional[float] = baseline.get("median_unit_price")
+        median_price: Optional[float] = baseline["median_unit_price"]
         if not median_price or median_price <= 0:
             # Guard against division by zero / bogus data.
             continue
@@ -282,8 +281,8 @@ async def _score_vendor_volume_spikes_for_invoice(
 
     header = rows[0]
     vendor_id = header["vendor_id"]
-    invoice_no = header.get("invoice_no")
-    invoice_total = header.get("invoice_total")
+    invoice_no = header["invoice_no"]
+    invoice_total = header["invoice_total"]
 
     # If we don't have an invoice total, we can't apply this rule.
     if invoice_total is None:
@@ -298,10 +297,10 @@ async def _score_vendor_volume_spikes_for_invoice(
         # No historical invoices for this vendor yet.
         return []
 
-    count_90d = baseline.get("invoice_count_90d") or 0
-    spend_90d = baseline.get("total_spend_90d") or 0.0
-    count_30d = baseline.get("invoice_count_30d") or 0
-    spend_30d = baseline.get("total_spend_30d") or 0.0
+    count_90d = baseline["invoice_count_90d"] or 0
+    spend_90d = baseline["total_spend_90d"] or 0.0
+    count_30d = baseline["invoice_count_30d"] or 0
+    spend_30d = baseline["total_spend_30d"] or 0.0
 
     # Prefer the 90-day window if it has enough history; otherwise fall back to 30-day.
     baseline_window = None
@@ -391,8 +390,8 @@ async def _score_duplicate_invoices_for_invoice(
 
     header = rows[0]
     vendor_id = header["vendor_id"]
-    invoice_no = header.get("invoice_no")
-    invoice_total = header.get("invoice_total")
+    invoice_no = header["invoice_no"]
+    invoice_total = header["invoice_total"]
 
     duplicates = await _find_potential_duplicate_invoices(
         db,
@@ -410,9 +409,9 @@ async def _score_duplicate_invoices_for_invoice(
 
     for dup in duplicates:
         dup_id = dup["id"]
-        dup_invoice_no = dup.get("invoice_no")
-        dup_total = dup.get("total")
-        dup_date = dup.get("invoice_date")
+        dup_invoice_no = dup["invoice_no"]
+        dup_total = dup["total"]
+        dup_date = dup["invoice_date"]
 
         match_on_invoice_no = invoice_no is not None and dup_invoice_no == invoice_no
         match_on_total = invoice_total is not None and dup_total == invoice_total
