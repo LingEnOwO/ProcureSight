@@ -13,6 +13,10 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/// NextAuth OAuth account table
+/// - Stores OAuth provider accounts (Google, GitHub, etc.)
+/// - NOT used for email magic-link login
+/// - Safe to keep for future OAuth support
 model Account {
   id                String  @id @default(cuid())
   userId            String
@@ -32,6 +36,10 @@ model Account {
   @@unique([provider, providerAccountId])
 }
 
+/// Active login sessions managed by NextAuth
+/// - Created after successful authentication
+/// - Checked on every request to determine logged-in user
+/// - Deleted on sign-out or expiration
 model Session {
   id           String   @id @default(cuid())
   sessionToken String   @unique
@@ -41,6 +49,10 @@ model Session {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
+/// NextAuth user table
+/// - One row per unique email
+/// - Created on first successful login
+/// - Represents an authenticated identity, not a domain/business user
 model User {
   id            String    @id @default(cuid())
   name          String?
@@ -52,6 +64,10 @@ model User {
   sessions Session[]
 }
 
+/// One-time verification tokens for email magic-link login
+/// - Created when user requests a login link
+/// - Validated when user clicks the magic link
+/// - Automatically expires or is deleted after use
 model VerificationToken {
   identifier String
   token      String   @unique
