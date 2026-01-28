@@ -171,10 +171,71 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/alerts/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Alerts
+         * @description List alerts for the current org with optional filtering.
+         *
+         *     Always scopes results to the current org (derived from settings.ORG_ID).
+         */
+        get: operations["list_alerts_alerts__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/alerts/{alert_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch Alert
+         * @description Update an alert's status / acknowledgement fields.
+         *
+         *     This is used by the UI to acknowledge or dismiss alerts. The org scope is
+         *     enforced by always including the current org_id in the update query.
+         */
+        patch: operations["patch_alert_alerts__alert_id__patch"];
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AlertUpdatePayload
+         * @description Payload for acknowledging or dismissing an alert.
+         *
+         *     For v1 we keep this intentionally simple:
+         *       - callers must always supply a new `status` value (e.g. "open",
+         *         "acknowledged", "dismissed").
+         *       - the backend derives `acknowledged_at` automatically whenever an
+         *         alert moves out of the "open" state.
+         */
+        AlertUpdatePayload: {
+            /** Status */
+            status: string;
+            /** Acknowledged By */
+            acknowledged_by?: string | null;
+        };
         /** Body_extract_structured_extract_structured_post */
         Body_extract_structured_extract_structured_post: {
             /**
@@ -659,6 +720,79 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_alerts_alerts__get: {
+        parameters: {
+            query?: {
+                /** @description Filter by alert status */
+                status?: string | null;
+                /** @description Filter by severity */
+                severity?: string | null;
+                /** @description Max number of alerts */
+                limit?: number;
+                /** @description Pagination offset */
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_alert_alerts__alert_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                alert_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlertUpdatePayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
                 };
             };
             /** @description Validation Error */
