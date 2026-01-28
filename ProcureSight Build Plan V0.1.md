@@ -173,11 +173,11 @@ data/
 ```
 
 #### Quality checklist (helps the pipeline)
+
 - Consistent columns across CSVs; dates are ISO (YYYY-MM-DD); currency is ISO 4217.
 - Totals roughly match: `abs(subtotal + tax - total) <= 0.02`.
 - Include a few edge cases: duplicate `invoice_no`, credit/negative lines, long invoices.
 - PDFs mix text-based and image-only (for later OCR).
-
 
 ### Create `docker-compose.yml` and `Makefile` (required before loading)
 
@@ -211,8 +211,8 @@ services:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
     ports:
-      - "9000:9000"   # S3 API
-      - "9001:9001"   # Web console
+      - "9000:9000" # S3 API
+      - "9001:9001" # Web console
     volumes:
       - minio_data:/data
     healthcheck:
@@ -252,6 +252,7 @@ load-samples: ## upload sample files to MinIO + register in raw_docs
 ```
 
 **Usage**
+
 ```bash
 make up         # starts Postgres + MinIO
 make seed       # creates tables/fixtures
@@ -262,15 +263,18 @@ make load-samples
 
 **Follow this exact order (matches what we just did):**
 
-1) **Start infra (Postgres + MinIO)**
+1. **Start infra (Postgres + MinIO)**
+
    ```bash
    make up
    # equivalent: docker compose up -d db minio
    ```
+
    - MinIO console: http://localhost:9001 (minioadmin / minioadmin)
 
-2) **Host-side env for scripts** (use localhost, because the scripts run on your host)
+2. **Host-side env for scripts** (use localhost, because the scripts run on your host)
    Create `.env.local` in the repo root:
+
    ```
    DATABASE_URL=postgresql://procure:procure@localhost:5432/procuresight
    S3_ENDPOINT=http://localhost:9000
@@ -279,18 +283,20 @@ make load-samples
    S3_BUCKET=procuresight
    ```
 
-3) **Create schema**
+3. **Create schema**
+
    ```bash
    make seed
    ```
 
-4) **Upload & register** (walks `data/samples/**`, uploads to MinIO, inserts into `raw_docs`)
+4. **Upload & register** (walks `data/samples/**`, uploads to MinIO, inserts into `raw_docs`)
    ```bash
    make load-samples
    ```
    Example success: `[ok] uploaded N files and registered rows in raw_docs`.
 
 **Verify**
+
 - MinIO bucket `procuresight` contains `samples/...` objects (UI on :9001).
 - DB has rows:
   ```bash
@@ -298,6 +304,7 @@ make load-samples
   ```
 
 **Troubleshooting**
+
 - `no configuration file provided`: run from repo root (where `docker-compose.yml` lives).
 - `make: No rule to make target 'up'`: run `cd <repo-root>` or `make -C .. up`.
 - Connection errors to MinIO from host: use `S3_ENDPOINT=http://localhost:9000` (use `minio:9000` **only inside containers**).
@@ -307,6 +314,7 @@ make load-samples
 **Next step (do this now):**
 
 - **Create `.env.example`** (committed, no secrets) in the repo root with documented keys used by web/api and scripts. Example:
+
   ```
   # DB (container-to-container; used by services when we add them)
   POSTGRES_HOST=db
@@ -314,20 +322,21 @@ make load-samples
   POSTGRES_PASSWORD=procure
   POSTGRES_DB=procuresight
   DATABASE_URL=postgresql://procure:procure@db:5432/procuresight
-  
+
   # Storage (container-to-container)
   S3_ENDPOINT=http://minio:9000
   S3_ACCESS_KEY=minioadmin
   S3_SECRET_KEY=minioadmin
   S3_BUCKET=procuresight
-  
+
   # Email (dev)
   EMAIL_SERVER=smtp://mailhog:1025
   EMAIL_FROM=dev@procuresight.local
-  
+
   # Alerts
   SLACK_WEBHOOK_URL=
   ```
+
   > Note: your **host-run scripts** use `.env.local` with `localhost` endpoints (already created above). Services in Docker will use the `db`/`minio` hostnames from `.env.example`.
 
 - **Keep secrets out of git**
@@ -343,7 +352,7 @@ make load-samples
 - **Tenancy decision placeholder**
   - We'll start single-tenant for dev; add Row-Level Security (RLS) per org in Week 2.
 
-- *(Optional but recommended)* Add basic controls
+- _(Optional but recommended)_ Add basic controls
   - `pre-commit` hooks for formatting/lint.
   - `gitleaks` to scan for secrets before push.
 
@@ -388,10 +397,12 @@ ProcureSight/
 ### Docker Compose (services)
 
 **Now (running today):**
+
 - `db`: Postgres 15 (exposed on `localhost:5432`)
 - `minio`: S3-compatible storage (API on `localhost:9000`, console on `localhost:9001`)
 
 **Planned (add in Week 1 tasks):**
+
 - `web`: Next.js + Auth.js (magic-link) on `localhost:3000`
 - `api`: FastAPI service on `localhost:8000`
 - `mailhog`: local email capture for auth (UI on `localhost:8025`)
@@ -432,6 +443,7 @@ SLACK_WEBHOOK_URL=
 ### Makefile conveniences
 
 **Current (v0 now)**
+
 ```
 up:        ## start db + minio
 	docker compose up -d db minio
@@ -453,6 +465,7 @@ load-samples: ## upload sample files to MinIO + register in raw_docs
 ```
 
 **Planned (when apps are added)**
+
 ```
 setup:        ## install deps for web/api
 	cd apps/web && pnpm i
@@ -485,9 +498,9 @@ curl -X POST -H 'Content-type: application/json' \
 
 ```js
 await fetch(process.env.SLACK_WEBHOOK_URL, {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ text: '✅ ProcureSight webhook test from Node' })
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ text: "✅ ProcureSight webhook test from Node" }),
 });
 ```
 
@@ -507,9 +520,10 @@ What’s running and how the pieces connect — quick mental model:
 - **apps/api/** → FastAPI backend (Python). Exposes endpoints (e.g., `/vendors`) and publishes the OpenAPI spec at `/openapi.json`.
 - **packages/types/** → Auto‑generated TypeScript definitions (`api.d.ts`) from the OpenAPI spec. Keeps frontend and backend in sync.
 - **packages/client/** → Tiny TypeScript SDK that wraps `fetch` using those types (via `openapi-fetch`). Any app can import this (web/admin later).
-- **apps/web/** → Next.js frontend (TypeScript/React). Uses the client SDK to call the API and render UI. *(Scaffolded next in the plan.)*
+- **apps/web/** → Next.js frontend (TypeScript/React). Uses the client SDK to call the API and render UI. _(Scaffolded next in the plan.)_
 
 **Data flow:**
+
 ```
 FastAPI (Python)
    ↓ generates
@@ -523,6 +537,7 @@ apps/web (Next.js UI)
 ```
 
 **Dev environment reminders:**
+
 - **Host vs. containers:** use `localhost` in `.env.local` for host‑run scripts; use `db`/`minio` inside containers (`.env.example`).
 - **Type gen loop:** `make openapi` → `make types` (refresh spec, then TS types). You can also generate directly from the running server URL later.
 - **Why a separate client package?** Centralizes API setup + types once, so multiple apps can reuse it without duplicating code.
@@ -534,12 +549,14 @@ apps/web (Next.js UI)
 > Goal: clean separation of **files** (MinIO/S3) and **facts** (Postgres), safe multi-tenant by default, and easy to evolve.
 
 ### 3.1 Why this shape?
+
 - **Multi-tenant from day 0**: every business table has `org_id`; RLS enforces org isolation in the DB.
 - **Files vs. structured data**: PDFs live in object storage; Postgres holds pointers + invoice facts for querying.
 - **Staging → authoritative**: `extractions` stores raw JSON from OCR/LLM; `invoices`/`invoice_lines` store validated facts.
 - **Auditability & monitoring**: `audit_log` for who/what/when; `alerts` for anomalies (duplicates, mismatches, late, etc.).
 
 ### 3.2 Entity map (quick ER sketch)
+
 ```
 orgs 1─* users
   │
@@ -553,6 +570,7 @@ orgs 1─* users
 ```
 
 ### 3.3 Tables (v0)
+
 - `orgs(id, name, created_at)`
 - `users(id, org_id, email, role, created_at)`
 - `vendors(id, org_id, name, created_at)`
@@ -564,10 +582,12 @@ orgs 1─* users
 - `audit_log(id, org_id, actor_id, action, target, meta_json, at)`
 
 **Keys & types (high-level):**
+
 - UUID primary keys for most entities; `raw_docs.id` is `BIGSERIAL` (handy for ingestion logs).
 - Money: `NUMERIC(18,2)`; quantities/price: `NUMERIC(18,4)`.
 
 ### 3.4 Constraints & indexes
+
 - **Duplicate protection**: `UNIQUE (org_id, vendor_id, invoice_no)` on `invoices` (same invoice number can exist across vendors or orgs, but not within the same pair).
 - **Alert performance**: partial index `CREATE INDEX ... ON alerts(severity) WHERE resolved = FALSE` for fast “unresolved by severity”.
 - **FK deletes**:
@@ -575,9 +595,11 @@ orgs 1─* users
   - `invoices.raw_doc_id ... ON DELETE SET NULL` so history remains if a file is removed.
 
 ### 3.5 Row-level security (RLS)
+
 **What it is:** DB-enforced row filters. We enable RLS on org-scoped tables and add policies that compare the row’s `org_id` to the current session’s org.
 
 **How it works here:**
+
 - App (or `psql`) sets the org context per request/session:
   ```sql
   SET app.org_id = '<org-uuid>';  -- used by policies
@@ -599,6 +621,7 @@ orgs 1─* users
 > **Why RLS now?** It prevents the classic “forgot the WHERE org_id = ?” bug and keeps multi-tenant safety **in the database**, not just in app code.
 
 ### 3.6 What creates this schema?
+
 - `scripts/seed.py` executes SQL DDL to create tables, constraints, indexes, and RLS policies. It’s **idempotent** (safe to re-run).
 - Run order during dev:
   ```bash
@@ -607,6 +630,7 @@ orgs 1─* users
   ```
 
 ### 3.7 Verify quickly in psql
+
 ```sql
 -- show tables
 \dt
@@ -622,6 +646,7 @@ ORDER BY tablename, policyname;
 ```
 
 ### 3.8 Example queries you’ll actually run
+
 ```sql
 -- newest files you uploaded (metadata only)
 SELECT id, s3_key, filename, mime, bytes, uploaded_at
@@ -644,11 +669,10 @@ WHERE i.invoice_no = 'INV-12345';
 ```
 
 ### 3.9 FAQ
+
 - **Is MinIO a database?** No. It stores the **files** (PDF bytes). Postgres stores **metadata + parsed facts**. They’re linked by `raw_docs.s3_key`.
 - **Where do date/currency/total live?** In `invoices` (header) and `invoice_lines` (details). `raw_docs` knows file info only.
 - **Can we switch to AWS S3 later?** Yes. We keep to the S3 API and store `bucket + s3_key` in DB; switching is mostly env + data sync.
-
-
 
 ---
 
@@ -657,9 +681,11 @@ WHERE i.invoice_no = 'INV-12345';
 > Turn uploads into durable records: **UI → /api/ingest → MinIO → raw_docs → events (next).**
 
 ### Goal
+
 Turn uploads into durable, queryable records and notify clients in real time, with idempotent behavior for repeated uploads.
 
 **Checklist**
+
 - [x] Can upload from a client and receive `200 OK` with a `raw_doc_id`.
 - [x] Object appears in MinIO with the expected key; a new `raw_docs` row points to it.
 - [x] An SSE message arrives to clients listening on `/events` (e.g., `upload_received` with `raw_doc_id`).
@@ -668,6 +694,7 @@ Turn uploads into durable, queryable records and notify clients in real time, wi
 ---
 
 ### Endpoint contract (v0)
+
 - **POST** `/api/ingest`
   - **Body**: `multipart/form-data`
     - `file` (required): the file to upload
@@ -684,6 +711,7 @@ Turn uploads into durable, queryable records and notify clients in real time, wi
   - **Idempotency**: compute `sha256` of the uploaded bytes; if `(org_id, sha256)` already exists in `raw_docs`, short-circuit and return the existing row with `"duplicate": true`.
 
 ### Environment & bootstrap
+
 - `.env.local` (host‑run) must include:
   ```
   DATABASE_URL=postgresql://procure:procure@localhost:5432/procuresight
@@ -708,6 +736,7 @@ Turn uploads into durable, queryable records and notify clients in real time, wi
   ```
 
 ### Verification recipe (repeatable)
+
 1. **Health**
    ```
    curl -s http://localhost:8000/health | jq
@@ -732,24 +761,28 @@ Turn uploads into durable, queryable records and notify clients in real time, wi
 
 ### Real-time updates via SSE (what & why)
 
-**What is SSE?** Server‑Sent Events keep a single HTTP connection open so the API can *push* small JSON messages to the browser, instead of the UI *polling* every few seconds. This makes the app feel instant (upload received, extraction done, alert created).
+**What is SSE?** Server‑Sent Events keep a single HTTP connection open so the API can _push_ small JSON messages to the browser, instead of the UI _polling_ every few seconds. This makes the app feel instant (upload received, extraction done, alert created).
 
 **Why here?** Right after an upload succeeds, the API can notify the UI immediately:
+
 - `upload_received` (v0 now) → show a toast and update “Recent uploads”
 - `doc_processed` (v1) → extraction finished, link to parsed invoice
 - `alert_created` (v1) → anomaly detected, link to alert
 
-**Endpoint (dev):**  
+**Endpoint (dev):**
+
 - **GET** `/events` → `text/event-stream` (SSE)
 - Sends keep‑alive `: ping` comments every 15s to prevent idle timeouts.
 
 **Event format (each line block ends with a blank line):**
+
 ```
 data: {"type":"upload_received","raw_doc_id":123,"s3_key":"org/<ORG_ID>/uploads/<uuid>/<filename>"}
 
 ```
 
 **Minimal browser client (works in Next.js/vanilla):**
+
 ```ts
 const es = new EventSource("http://localhost:8000/events");
 es.onmessage = (ev) => {
@@ -762,6 +795,7 @@ es.onmessage = (ev) => {
 ```
 
 **Flow sketch**
+
 ```
 Client ──POST /api/ingest──▶ API ──put_object──▶ MinIO
           ▲                         │
@@ -771,20 +805,21 @@ Client ──POST /api/ingest──▶ API ──put_object──▶ MinIO
 
 **Future evolution (beyond in‑process SSE)**
 
-- **Near‑term (v1.5): Redis Pub/Sub (same client contract).** Replace the in‑process `SUBSCRIBERS` set with Redis channels.  
-  - Producer: `/api/ingest` publishes `upload_received` to `events:<org_id>`.  
-  - Consumer: `/events` subscribes to `events:<org_id>` and streams messages.  
+- **Near‑term (v1.5): Redis Pub/Sub (same client contract).** Replace the in‑process `SUBSCRIBERS` set with Redis channels.
+  - Producer: `/api/ingest` publishes `upload_received` to `events:<org_id>`.
+  - Consumer: `/events` subscribes to `events:<org_id>` and streams messages.
   - Why: supports multiple API instances with minimal code change. `/events` stays the same for the web app.
-- **Mid‑term (v2): Separate “work queue” from “notify bus.”**  
-  - **Durable jobs** (retries/DLQ): Celery/RQ/Arq or Redis Streams for extraction, validation, etc.  
+- **Mid‑term (v2): Separate “work queue” from “notify bus.”**
+  - **Durable jobs** (retries/DLQ): Celery/RQ/Arq or Redis Streams for extraction, validation, etc.
   - **Ephemeral fan‑out** (UI toasts): Redis Pub/Sub for `upload_received`, `doc_processed`, `alert_created`.
 - **Long‑term (v3): Durable event log.** Use Kafka/Pulsar/NATS JetStream for organization‑wide events and replay/audit. Keep `/events` as a thin gateway (SSE/WebSocket) that reads from the durable log.
-- **Scale considerations:**  
-  - AuthN on `/events` (JWT) + org‑scoped channels.  
-  - Per‑client buffer cap to handle slow consumers.  
+- **Scale considerations:**
+  - AuthN on `/events` (JWT) + org‑scoped channels.
+  - Per‑client buffer cap to handle slow consumers.
   - Metrics: connected clients, publish latency, dropped messages.
 
 ### Troubleshooting
+
 - **`invalid input syntax for type uuid: "<…>"`** → `.env.local` contains angle brackets; use bare UUIDs.
 - **`NoSuchBucket`** on upload → create the bucket named in `S3_BUCKET` first.
 - **Health `db:false` or `s3:false`** → verify Docker services (`make up`) and env values.
@@ -793,6 +828,7 @@ Client ──POST /api/ingest──▶ API ──put_object──▶ MinIO
 - **DB vs API mismatch** → confirm both use the same `DATABASE_URL` (host `localhost`, not `db`, for host‑run API).
 
 ### v1 Enhancements (next)
+
 - **Idempotency**: compute `sha256` on upload; if `(org_id, sha256)` exists in `raw_docs`, return existing `raw_doc_id` (no duplicate work).
 - **SSE**: broadcast `upload_received` (v0) and `doc_processed` (post‑extraction) on `/events` for the UI.
 - **Queue**: enqueue extraction job (Celery/RQ/Temporal placeholder).
@@ -851,7 +887,7 @@ Return strict JSON matching this schema.
 
 ## 6) Anomaly detection (v1)
 
-- **Features**: unit price deltas vs vendor median, duplicates (invoice\_no, total), sudden volume spikes
+- **Features**: unit price deltas vs vendor median, duplicates (invoice_no, total), sudden volume spikes
 - **Model**: Isolation Forest (scikit‑learn) on engineered features; simple thresholds as baseline
 - **Alerts**: write to `alerts` and push to Slack via webhook
 - **Dashboard**: "Top anomalies" table with acknowledge/dismiss
@@ -893,14 +929,113 @@ Return strict JSON matching this schema.
    - Train an Isolation Forest model (scikit-learn) using engineered per-invoice features (e.g., normalized unit price deviations, spend vs baseline, invoice frequency).
    - Store the continuous anomaly score in `alerts.score` or in a companion table and use it to rank alerts.
    - Keep rule-based checks as the explainable backbone and layer ML scores on top for better prioritization.
+
 ---
 
 ## 7) Web app (MVP)
 
-- **Auth**: Auth.js magic link (MailHog in dev)
-- **Pages**: Login, Uploads, Invoices (table), Vendors, Alerts, Dashboard
-- **Charts**: Vendor spend by month (bar), anomalies over time (line)
-- **Real‑time**: SSE for new file processed + new alert
+> Goal: a usable UI that lets a demo user **sign in**, **upload docs**, **see parsed invoices**, and **triage alerts** in real time.
+
+### Tech + conventions
+
+- **Next.js (TypeScript)** with App Router
+- **Auth.js** magic-link auth (MailHog SMTP in dev)
+- **Typed API client** from `packages/client` (generated from FastAPI OpenAPI)
+- UI components: keep it simple and consistent (Tailwind/shadcn-style components are fine)
+
+### Information architecture
+
+- Global layout:
+  - Top bar: org switcher (later), user menu (email + sign out)
+  - Left nav: Dashboard, Uploads, Invoices, Vendors, Alerts
+- Shared UI patterns:
+  - Consistent page header (title + primary action)
+  - Table pages: search + filters + pagination + empty states
+  - Detail pages: summary “cards” + tabs/sections + audit metadata
+- Next.js App Router structure uses route groups:
+  - `(auth)` → unauthenticated pages (login)
+  - `(app)` → authenticated pages (dashboard, uploads, invoices, vendors, alerts)
+- Sidebar + top bar are rendered by the `(app)/layout.tsx`.
+- Global providers (SessionProvider, metadata, globals.css) live in the root `app/layout.tsx`.
+
+### Routes / pages (what each page must do)
+
+#### 1) Login (`/login`)
+
+- Magic-link sign-in UI (email input + submit)
+- Dev flow: link delivered to MailHog UI (no real email provider needed)
+- Implemented using Auth.js EmailProvider with Prisma adapter; dev emails delivered via MailHog.
+- Post-login redirect to `/dashboard`
+
+#### 2) Dashboard (`/dashboard`)
+
+- KPI cards: vendor count, invoice count (implemented)
+- Recent vendors / recent invoices (implemented)
+- Charts (vendor spend by month, anomalies over time): future enhancement, not included in MVP.
+
+#### 3) Uploads (`/uploads`)
+
+- Upload form:
+  - Drag & drop + browse file
+  - Accept: CSV/JSON/PDF (start with what backend supports)
+  - Show client-side validation (file type, size limit)
+- “Recent uploads” table:
+  - filename, uploaded_at, status (received / processed / failed), duplicate badge
+  - link to raw doc (and later: link to extracted invoice)
+- On success: show toast + reset form
+
+#### 4) Invoices list (`/invoices`)
+
+- Table implemented: vendor_id, invoice_no, status, currency, total, invoice_date
+- Filters/sort/pagination: future work.
+
+#### 5) Invoice detail (`/invoices/[id]`)
+
+- Header summary: vendor, invoice_no, dates, totals, status
+- Line items table
+- “Validation & confidence” panel:
+  - subtotal vs sum(lines), total vs subtotal+tax, rounding tolerance results
+  - needs_review flag + warnings list
+- Link to source document (`raw_doc_id` → open/download PDF later)
+
+#### 6) Vendors (`/vendors`)
+
+- Vendors table: name, invoice_count, total_spend (last 90 days)
+- Vendor detail (optional for MVP but ideal):
+  - vendor spend trend chart + recent invoices list
+
+#### 7) Alerts (`/alerts`)
+
+- Alerts table:
+  - created_at, vendor, invoice_no, type, severity/score, status (open/ack/dismissed)
+- Filters: status, severity, date range, vendor
+- Actions:
+  - Acknowledge / Dismiss (calls `PATCH /alerts/{id}`)
+  - Open invoice detail from an alert row
+
+### Real-time (SSE) behavior
+
+- Connect a single `EventSource` to `GET /events` after login
+- Handle these message types (from the backend plan):
+  - `upload_received` → toast + refresh uploads table
+  - `doc_processed` → update uploads status + (if invoice created) refresh invoices
+  - `alert_created` → toast + refresh alerts + increment dashboard KPI
+- Implementation note: keep “live updates” incremental by invalidating/refetching the relevant query (uploads / invoices / alerts) instead of full page reloads.
+
+### UX requirements (MVP quality bar)
+
+- Loading states (skeleton/table placeholder), error states, and empty states for every page
+- Form validation messages that tell the user exactly what to fix
+- Basic responsiveness (works on laptop widths; mobile can be “usable” but not perfect)
+
+### Concrete UI build tasks (copy into issues)
+
+- Scaffold `apps/web` with routes + layout + nav
+- Wire Auth.js email provider (MailHog) + protected routes
+- Implement a shared `apiClient` wrapper (uses `packages/client`) + centralized error handling
+- Build the 5 core pages: Dashboard, Uploads, Invoices, Vendors, Alerts
+- Add charts (bar + line) using a lightweight library
+- Add SSE hook + toast notifications + query refresh logic
 
 ---
 
@@ -944,7 +1079,7 @@ Return strict JSON matching this schema.
 **Day 2** — Auth + DB + Seeds
 
 - Add Auth.js magic‑link using MailHog SMTP
-- Create migration for base tables (orgs, users, vendors, raw\_docs, invoices, invoice\_lines, alerts, audit\_log)
+- Create migration for base tables (orgs, users, vendors, raw_docs, invoices, invoice_lines, alerts, audit_log)
 - Write `scripts/seed.py` to insert demo org/users/vendors
 
 **Day 3** — Ingestion v0
@@ -1004,9 +1139,7 @@ Return strict JSON matching this schema.
 
 ## 12) Task checklists (copy/paste into issues)
 
--
-
----
+- ***
 
 ## 13) Nice‑to‑have developer UX
 
@@ -1033,4 +1166,3 @@ Return strict JSON matching this schema.
 3. `make seed` → org/users/vendors
 4. Upload `samples/invoice.csv` → see dashboard chart + toast
 5. (Optional) set `SLACK_WEBHOOK_URL` → receive anomaly alert
-
