@@ -50,9 +50,9 @@ AI-assisted invoice processing and anomaly detection system designed for small-t
 ┌─────────────────────────────────────────────────────────────────┐
 │                         PostgreSQL                              │
 │                                                                 │
-│  Tables: invoices, invoice_lines, alerts, vendors, raw_docs    │
-│  Views: vendor_unit_price_stats, vendor_spend_stats            │
-│  RLS: org_id scoping enforced per session                      │
+│  Tables: invoices, invoice_lines, alerts, vendors, raw_docs     │
+│  Views: vendor_unit_price_stats, vendor_spend_stats             │
+│  RLS: org_id scoping enforced per session                       │
 └────────────────────────────┬────────────────────────────────────┘
                              │
                              │ Scoring triggers
@@ -60,8 +60,8 @@ AI-assisted invoice processing and anomaly detection system designed for small-t
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Alerts + Notifications                       │
 │                                                                 │
-│  • Slack Webhook (instant notifications)                       │
-│  • SSE Events (real-time UI updates)                           │
+│  • Slack Webhook (instant notifications)                        │
+│  • SSE Events (real-time UI updates)                            │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
