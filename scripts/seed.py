@@ -278,6 +278,15 @@ with psycopg.connect(DATABASE_URL) as conn:
             row = cur.fetchone()
         demo_user_id = row[0]
 
+        # === NextAuth tables (frontend authentication) ===
+        # These tables are used by apps/web for NextAuth.js authentication
+        # They are separate from business logic tables above
+        print("Creating NextAuth tables...")
+        nextauth_sql_path = os.path.join(os.path.dirname(__file__), "nextauth_tables.sql")
+        with open(nextauth_sql_path, "r") as f:
+            nextauth_ddl = f.read()
+        cur.execute(nextauth_ddl)
+
         conn.commit()
 
         print("v0 schema created")
