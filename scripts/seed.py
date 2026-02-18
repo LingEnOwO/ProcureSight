@@ -21,8 +21,13 @@ CREATE TABLE IF NOT EXISTS users (
   org_id UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
   email TEXT NOT NULL UNIQUE,
   role TEXT NOT NULL,
+  nextauth_user_id TEXT UNIQUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Comment for NextAuth linkage
+COMMENT ON COLUMN public.users.nextauth_user_id IS
+  'Links to nextauth.users.id for authentication identity. Populated on first login.';
 
 -- Vendors
 CREATE TABLE IF NOT EXISTS vendors (

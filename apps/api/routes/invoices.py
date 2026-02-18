@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query, Depends
 from psycopg import connect
 from ..settings import settings
+from ..auth import get_user_context, UserContext
 from typing import Optional, List
 from pydantic import BaseModel
 from ..repos.invoices import (
@@ -15,10 +16,13 @@ from ..models.invoice import Invoice, InvoiceLine
 
 router = APIRouter(prefix="/invoices", tags=["invoices"])
 
-def get_conn():
+def get_conn(user_ctx: UserContext):
+    """Create database connection with RLS context set from authenticated user."""
     conn = connect(settings.DATABASE_URL)
     with conn.cursor() as cur:
-        cur.execute("SELECT set_config('app.org_id', %s, true)", (settings.ORG_ID,))
+        # Set RLS context from JWT claims
+        cur.execute("SELECT set_config('app.org_id', %s, true)", (user_ctx.org_id,))
+        cur.execute("SELECT set_config('app.actor_id', %s, true)", (user_ctx.business_user_id,))
     return conn
 
 # Pydantic model for PATCH
@@ -36,8 +40,12 @@ class InvoicePatch(BaseModel):
 
 # List invoices endpoint
 @router.get("")
-def list_invoices(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0)):
-    conn = get_conn()
+def list_invoices(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    user_ctx: UserContext = Depends(get_user_context)
+):
+    conn = get_conn(user_ctx)
     try:
         items = repo_list_invoices(conn, limit=limit, offset=offset)
         return {"items": items, "limit": limit, "offset": offset}
@@ -46,8 +54,11 @@ def list_invoices(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, g
 
 # Get single invoice with lines
 @router.get("/{invoice_id}")
-def get_invoice(invoice_id: str):
-    conn = get_conn()
+def get_invoice(
+    invoice_id: str,
+    user_ctx: UserContext = Depends(get_user_context)
+):
+    conn = get_conn(user_ctx)
     try:
         inv = get_invoice_with_lines(conn, invoice_id)
         if not inv:
@@ -56,11 +67,14 @@ def get_invoice(invoice_id: str):
     finally:
         conn.close()
 
-# ToDo: Add authentication process for patch and post
 # PATCH endpoint for partial updates
 @router.patch("/{invoice_id}")
-def patch_invoice(invoice_id: str, patch: InvoicePatch = Body(...)):
-    conn = get_conn()
+def patch_invoice(
+    invoice_id: str,
+    patch: InvoicePatch = Body(...),
+    user_ctx: UserContext = Depends(get_user_context)
+):
+    conn = get_conn(user_ctx)
     try:
         with conn:
             # Update scalar fields
@@ -76,13 +90,16 @@ def patch_invoice(invoice_id: str, patch: InvoicePatch = Body(...)):
         conn.close()
 
 @router.post("", response_model=Invoice)
-def create_invoices(inv: Invoice = Body(...)):
+def create_invoices(
+    inv: Invoice = Body(...),
+    user_ctx: UserContext = Depends(get_user_context)
+):
     try:
-        conn = get_conn()
+        conn = get_conn(user_ctx)
         with conn:
             vendor_name = getattr(inv, "vendor", None) or "Unknown Vendor"
-            vendor_id = ensure_vendor(conn, settings.ORG_ID, vendor_name)
-            invoice_id = upsert_invoice(conn, settings.ORG_ID, vendor_id, inv.dict(), raw_doc_id=None)
+            vendor_id = ensure_vendor(conn, user_ctx.org_id, vendor_name)
+            invoice_id = upsert_invoice(conn, user_ctx.org_id, vendor_id, inv.dict(), raw_doc_id=None)
             replace_lines(conn, invoice_id, [ln.dict() for ln in inv.lines])
         return inv.model_copy(update={"id": invoice_id})
     except Exception as e:

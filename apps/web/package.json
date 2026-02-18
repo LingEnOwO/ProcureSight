@@ -17,6 +17,8 @@
     "@auth/pg-adapter": "^1.7.3",
     "@procuresight/client": "workspace:*",
     "@procuresight/types": "workspace:*",
+    "@types/jsonwebtoken": "^9.0.10",
+    "jsonwebtoken": "^9.0.3",
     "next": "^16.0.10",
     "next-auth": "^4.24.13",
     "nodemailer": "^7.0.12",

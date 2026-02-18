@@ -1,4 +1,4 @@
-import { api } from "@/lib/apiClient";
+import { serverGet } from "@/lib/serverApiClient";
 
 export const dynamic = "force-dynamic";
 
@@ -31,16 +31,14 @@ function pickTitleLike(obj: UnknownRecord): string {
 export default async function Page() {
   // Phase 3D-3 goal: show a real dashboard shell + prove we can fetch real domain data.
   // We DO NOT call every endpoint; we only pull a couple key collections.
-  const [vendorsRes, invoicesRes] = await Promise.all([
-    api.GET("/vendors"),
-    api.GET("/invoices"),
+  // Use server-side API client since this is a Server Component
+  const [vendorsData, invoicesData] = await Promise.all([
+    serverGet("/vendors").catch(() => null),
+    serverGet("/invoices").catch(() => null),
   ]);
 
-  const vendorsError = vendorsRes.error;
-  const invoicesError = invoicesRes.error;
-
-  const vendorsData = vendorsRes.data as unknown;
-  const invoicesData = invoicesRes.data as unknown;
+  const vendorsError = !vendorsData;
+  const invoicesError = !invoicesData;
 
   // Many APIs return either an array or an object like { items: [...] }
   const vendorsItems =

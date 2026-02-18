@@ -1,11 +1,12 @@
 import logging
 
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from psycopg import Connection
 from contextlib import contextmanager
 from typing import Iterator
 from pydantic import ValidationError
 
+from ..auth import get_user_context, UserContext
 from ..repos.invoices import ensure_vendor, upsert_invoice, replace_lines
 from ..repos.alerts import insert_alert_candidates
 from ..services.structured_extract import parse_csv_bytes, parse_json_bytes, assemble_invoices_from_rows
@@ -24,10 +25,6 @@ from ..db import database, pool
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/extract", tags=["extraction"])
-
-
-def _org_id() -> str:
-    return settings.ORG_ID
 
 
 @contextmanager
@@ -54,8 +51,12 @@ async def _set_async_org_context(org_id: str) -> None:
 
 
 @router.post("/structured")
-async def extract_structured(file: UploadFile = File(...), raw_doc_id: int | None = None):
-    org_id = _org_id()
+async def extract_structured(
+    file: UploadFile = File(...),
+    raw_doc_id: int | None = None,
+    user_ctx: UserContext = Depends(get_user_context)
+):
+    org_id = user_ctx.org_id
     if not org_id:
         raise HTTPException(400, "Missing org context")
 
@@ -216,13 +217,17 @@ async def extract_structured(file: UploadFile = File(...), raw_doc_id: int | Non
 
 
 @router.post("/unstructured")
-async def extract_unstructured(file: UploadFile = File(...), raw_doc_id: int | None = None):
+async def extract_unstructured(
+    file: UploadFile = File(...),
+    raw_doc_id: str | None = None,
+    user_ctx: UserContext = Depends(get_user_context)
+):
     """
     Extract an invoice from an unstructured document (e.g., PDF) using
     the unstructured extraction pipeline (PDF -> text -> LLM -> Invoice),
     then run business validation and persist to the database.
     """
-    org_id = _org_id()
+    org_id = user_ctx.org_id
     if not org_id:
         raise HTTPException(400, "Missing org context")
 

@@ -1,6 +1,5 @@
 "use client";
 
-import { api } from "@/lib/apiClient";
 import { useState } from "react";
 
 type UploadStatus =
@@ -42,18 +41,22 @@ export default function Page() {
       const ingestFormData = new FormData();
       ingestFormData.append("file", file);
 
-      const ingestRes = await api.POST("/api/ingest", {
-        body: ingestFormData as any,
+      // Call Next.js gateway route handler (not backend directly)
+      const ingestRes = await fetch("/api/ingest", {
+        method: "POST",
+        body: ingestFormData,
       });
 
-      if (ingestRes.error) {
+      if (!ingestRes.ok) {
+        const errorData = await ingestRes.json().catch(() => ({ detail: "Upload failed" }));
         setStatus("error");
         setErrorMessage(
-          `Upload failed: ${JSON.stringify(ingestRes.error)}`
+          `Upload failed: ${errorData.detail || ingestRes.statusText}`
         );
         return;
       }
 
+      await ingestRes.json(); // Consume response
       setStatus("uploaded");
       setStatusMessage("File uploaded successfully");
 
@@ -61,8 +64,8 @@ export default function Page() {
       const fileExt = file.name.split(".").pop()?.toLowerCase();
       const isPdf = fileExt === "pdf";
       const extractEndpoint = isPdf
-        ? "/extract/unstructured"
-        : "/extract/structured";
+        ? "/api/extract/unstructured"
+        : "/api/extract/structured";
 
       setStatus("extracting");
       setStatusMessage(
@@ -72,22 +75,27 @@ export default function Page() {
       const extractFormData = new FormData();
       extractFormData.append("file", file);
 
-      const extractRes = await api.POST(extractEndpoint as any, {
-        body: extractFormData as any,
+      // Call Next.js gateway route handler for extraction
+      const extractRes = await fetch(extractEndpoint, {
+        method: "POST",
+        body: extractFormData,
       });
 
-      if (extractRes.error) {
+      if (!extractRes.ok) {
+        const errorData = await extractRes.json().catch(() => ({ detail: "Extraction failed" }));
         setStatus("error");
         setErrorMessage(
-          `Extraction failed: ${JSON.stringify(extractRes.error)}`
+          `Extraction failed: ${errorData.detail || extractRes.statusText}`
         );
         return;
       }
 
+      const extractData = await extractRes.json();
+
       // Success!
       setStatus("complete");
       setStatusMessage("Processing complete");
-      setResultData(extractRes.data);
+      setResultData(extractData);
     } catch (err: any) {
       setStatus("error");
       setErrorMessage(`Unexpected error: ${err.message || String(err)}`);

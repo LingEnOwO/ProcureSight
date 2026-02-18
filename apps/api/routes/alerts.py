@@ -1,11 +1,12 @@
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from psycopg import Connection, connect
 from pydantic import BaseModel
 
 from ..repos.alerts import list_alerts_for_org, update_alert_status
 from ..settings import settings
+from ..auth import get_user_context, UserContext
 
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
@@ -31,21 +32,18 @@ def list_alerts(
     severity: Optional[str] = Query(None, description="Filter by severity"),
     limit: int = Query(50, ge=1, le=100, description="Max number of alerts"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
+    user_ctx: UserContext = Depends(get_user_context)
 ) -> Dict[str, Any]:
     """List alerts for the current org with optional filtering.
 
-    Always scopes results to the current org (derived from settings.ORG_ID).
+    Org context derived from authenticated user's JWT.
     """
-    org_id = settings.ORG_ID
-    if not org_id:
-        raise HTTPException(status_code=400, detail="Missing org context")
-
     conn: Connection = connect(settings.DATABASE_URL)
     try:
         with conn:
             items = list_alerts_for_org(
                 conn,
-                org_id=str(org_id),
+                org_id=user_ctx.org_id,
                 status=status,
                 severity=severity,
                 limit=limit,
@@ -62,22 +60,22 @@ def list_alerts(
 
 
 @router.patch("/{alert_id}")
-def patch_alert(alert_id: str, payload: AlertUpdatePayload) -> Dict[str, Any]:
+def patch_alert(
+    alert_id: str,
+    payload: AlertUpdatePayload,
+    user_ctx: UserContext = Depends(get_user_context)
+) -> Dict[str, Any]:
     """Update an alert's status / acknowledgement fields.
 
     This is used by the UI to acknowledge or dismiss alerts. The org scope is
     enforced by always including the current org_id in the update query.
     """
-    org_id = settings.ORG_ID
-    if not org_id:
-        raise HTTPException(status_code=400, detail="Missing org context")
-
     conn: Connection = connect(settings.DATABASE_URL)
     try:
         with conn:
             updated = update_alert_status(
                 conn,
-                org_id=str(org_id),
+                org_id=user_ctx.org_id,
                 alert_id=alert_id,
                 status=payload.status,
                 acknowledged_by=payload.acknowledged_by,
