@@ -12,6 +12,15 @@ from ..auth import get_user_context, UserContext
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
 
+def get_conn(user_ctx: UserContext):
+    """Create database connection with RLS context set from authenticated user."""
+    conn = connect(settings.DATABASE_URL)
+    with conn.cursor() as cur:
+        cur.execute("SELECT set_config('app.org_id', %s, true)", (user_ctx.org_id,))
+        cur.execute("SELECT set_config('app.actor_id', %s, true)", (user_ctx.business_user_id,))
+    return conn
+
+
 class AlertUpdatePayload(BaseModel):
     """Payload for acknowledging or dismissing an alert.
 
@@ -38,7 +47,7 @@ def list_alerts(
 
     Org context derived from authenticated user's JWT.
     """
-    conn: Connection = connect(settings.DATABASE_URL)
+    conn = get_conn(user_ctx)
     try:
         with conn:
             items = list_alerts_for_org(
@@ -70,7 +79,7 @@ def patch_alert(
     This is used by the UI to acknowledge or dismiss alerts. The org scope is
     enforced by always including the current org_id in the update query.
     """
-    conn: Connection = connect(settings.DATABASE_URL)
+    conn = get_conn(user_ctx)
     try:
         with conn:
             updated = update_alert_status(
