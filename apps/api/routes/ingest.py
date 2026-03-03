@@ -1,9 +1,10 @@
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 import asyncio, json, mimetypes, hashlib
 from starlette.responses import StreamingResponse
 from ..storage import put_object, s3_ok
 from ..db import insert_raw_doc, get_raw_doc_by_hash, db_ok
 from ..settings import settings
+from ..auth import get_user_context, UserContext
 
 router = APIRouter(tags=["ingestion"])
 
@@ -56,9 +57,15 @@ async def sse_events():
                              })
             
 # Ingestion
-@router.post("/api/ingest")
-async def ingest(file: UploadFile = File(...), org_id: str | None = Form(None)):
-    org = org_id or settings.ORG_ID
+@router.post("/ingest")
+async def ingest(
+    file: UploadFile = File(...),
+    user_ctx: UserContext = Depends(get_user_context)
+):
+    """
+    Ingest file upload. User context from trusted Next.js gateway headers.
+    """
+    org = user_ctx.org_id
 
     # Read bytes
     try:
@@ -73,7 +80,7 @@ async def ingest(file: UploadFile = File(...), org_id: str | None = Form(None)):
     existing = get_raw_doc_by_hash(org_id=org, sha256=digest)
     if existing:
         # Do not upload again and do not insert another DB row.
-        # Optionally skip broadcast for duplicates to avoid noisy toasts.s
+        # Optionally skip broadcast for duplicates to avoid noisy toasts.
         return {
             "raw_doc_id": existing["id"],
             "s3_key": existing["s3_key"],
@@ -98,7 +105,7 @@ async def ingest(file: UploadFile = File(...), org_id: str | None = Form(None)):
             mime=content_type,
             byte_len=len(data),
             sha256=digest,
-            uploaded_by=settings.UPLOADER_ID,
+            uploaded_by=user_ctx.business_user_id,  # Use authenticated user ID
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"DB insert failed: {e}")

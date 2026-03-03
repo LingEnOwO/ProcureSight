@@ -28,15 +28,17 @@ AI-assisted invoice processing and anomaly detection system designed for small-t
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         Next.js Web App                         │
-│                  (Auth, Uploads UI, Alerts UI)                  │
+│         (Auth gateway, Uploads UI, Alerts UI, Dashboard)        │
 └────────────────────────────┬────────────────────────────────────┘
                              │
-                             │ Typed API Client (OpenAPI)
+                             │ Gateway (session → trusted headers)
+                             │ Server components use serverFetch directly
+                             │ Client components use /api/backend/* proxy
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                         FastAPI API                             │
 │                                                                 │
-│  POST /api/ingest        ──────────────────▶  MinIO             │
+│  POST /ingest            ──────────────────▶  MinIO             │
 │  POST /extract/structured                   (S3-compatible)     │
 │  POST /extract/unstructured                                     │
 │  GET  /invoices                                                 │
@@ -52,7 +54,7 @@ AI-assisted invoice processing and anomaly detection system designed for small-t
 │                                                                 │
 │  Tables: invoices, invoice_lines, alerts, vendors, raw_docs     │
 │  Views: vendor_unit_price_stats, vendor_spend_stats             │
-│  RLS: org_id scoping enforced per session                       │
+│  Schemas: public (business data), nextauth (auth tables)        │
 └────────────────────────────┬────────────────────────────────────┘
                              │
                              │ Scoring triggers
@@ -81,7 +83,7 @@ A user uploads an invoice (PDF, CSV, or JSON) through the web app. The ingestion
 - ✅ **Rule-based anomaly detection** using vendor unit price baselines, spend spike detection, and duplicate invoice heuristics
 - ✅ **Alerts system** with Postgres storage, Slack webhook notifications, and SSE real-time events
 - ✅ **Alert APIs** for filtered listing (`GET /alerts`) and status updates (`PATCH /alerts/{id}`)
-- ✅ **Row-Level Security (RLS)** enforcement via `app.org_id` session variables for multi-tenant data isolation
+- ✅ **Multi-tenant data isolation** via `org_id` scoping on all queries, enforced through trusted headers from the Next.js gateway. Postgres RLS is enabled and enforced for sync routes (`/vendors`, `/invoices`, `/alerts`, `/ingest`) via a non-superuser `app_user` role; the async scoring pipeline still connects as superuser (RLS bypassed there, but queries filter by `org_id` explicitly)
 
 **Frontend (Next.js + TypeScript):**
 
@@ -167,14 +169,14 @@ Sign in with any email address. Check MailHog (http://localhost:8025) for the ma
 - **Ingestion pipeline** — implemented idempotent file uploads with SHA-256 deduplication, MinIO storage, and metadata persistence
 - **Extraction pipeline** — built unified validation logic for structured (CSV/JSON) and unstructured (PDF) inputs with confidence scoring and business rule checks
 - **Anomaly detection logic** — created rule-based scoring engine using vendor baselines (unit price stats, spend patterns) and duplicate detection heuristics
-- **Frontend integration** — wired Next.js app to typed API client, implemented magic-link auth, and built read-only UIs for uploads and alerts
+- **Frontend integration** — implemented Next.js gateway pattern (session validation → trusted headers to FastAPI), magic-link auth, and read-only UIs for uploads, alerts, invoices, vendors, and dashboard
 - **Local dev infrastructure** — configured Docker Compose for Postgres, MinIO, and MailHog with Makefile automation for common workflows
 
 ---
 
 ## Tech Stack
 
-**Frontend:** Next.js 14 (App Router), TypeScript, Auth.js, openapi-fetch  
+**Frontend:** Next.js 16 (App Router), TypeScript, Auth.js, openapi-fetch  
 **Backend:** FastAPI, Pydantic, psycopg, pdfplumber  
 **Data:** PostgreSQL 15, MinIO (S3-compatible)  
 **Dev Tools:** Docker Compose, MailHog, Makefile  

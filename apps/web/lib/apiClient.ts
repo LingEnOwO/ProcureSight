@@ -1,8 +1,37 @@
 import createClient from "openapi-fetch";
 import type { paths } from "@procuresight/types";
 
-const baseUrl =
-  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ?? "http://localhost:8000";
+/**
+ * ⚠️ DEPRECATED - Gateway Pattern Migration
+ * 
+ * This client is deprecated in favor of the gateway pattern where Next.js
+ * handles all authentication and forwards requests to the private FastAPI backend.
+ * 
+ * RECOMMENDED ALTERNATIVES:
+ * 
+ * For Server Components:
+ *   Use serverFetch() from @/lib/serverApiClient
+ *   Example: const response = await serverFetch('/vendors');
+ * 
+ * For Client Components:
+ *   Use Next.js route handlers (e.g., /api/backend/*, /api/ingest, /api/extract/*)
+ *   Example: fetch('/api/backend/vendors')
+ * 
+ * WHY DEPRECATED:
+ *   - This client proxies through /api/backend/* which is OK
+ *   - But promotes direct backend access patterns
+ *   - Gateway pattern makes authentication boundary clearer
+ *   - Easier to add rate limiting, caching, etc. at gateway layer
+ */
+
+// Use Next.js API proxy instead of direct backend URL
+// This solves the cross-port cookie issue by keeping everything on localhost:3000
+// For server-side (like Server Components), we need an absolute URL
+// For client-side, we can use a relative URL
+const isServer = typeof window === 'undefined';
+const baseUrl = isServer 
+  ? "http://localhost:3000/api/backend"  // Absolute URL for server-side
+  : "/api/backend";  // Relative URL for client-side
 
 /**
  * Typed OpenAPI client.

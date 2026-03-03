@@ -1,9 +1,15 @@
 from dataclasses import asdict
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from databases import Database
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
+from psycopg import connect
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+import httpx
+import logging
 
+from apps.api.auth import get_user_context, UserContext
 from apps.api.services.anomaly_scoring import AlertCandidate, score_invoice
 from apps.api.settings import settings
 
@@ -11,7 +17,10 @@ router = APIRouter(prefix="/score", tags=["scoring"])
 
 
 @router.post("/invoice/{invoice_id}")
-async def debug_score_invoice(invoice_id: str) -> Dict[str, Any]:
+async def debug_score_invoice(
+    invoice_id: str,
+    user_ctx: UserContext = Depends(get_user_context)
+) -> Dict[str, Any]:
     """
     Debug endpoint: re-run anomaly scoring for an existing invoice.
 
@@ -24,10 +33,6 @@ async def debug_score_invoice(invoice_id: str) -> Dict[str, Any]:
       - After backfilling historical data.
       - When investigating why a particular invoice was or was not flagged.
     """
-    org_id = settings.ORG_ID
-    if not org_id:
-        raise HTTPException(status_code=400, detail="Missing org context")
-
     # Run scoring against the existing DB state using a temporary Database
     # instance. This keeps the debug endpoint self-contained and avoids
     # coupling it to any particular connection pool implementation.
@@ -36,7 +41,7 @@ async def debug_score_invoice(invoice_id: str) -> Dict[str, Any]:
     try:
         alerts: List[AlertCandidate] = await score_invoice(
             db,
-            org_id=str(org_id),
+            org_id=user_ctx.org_id,
             invoice_id=str(invoice_id),
         )
     finally:
@@ -47,7 +52,7 @@ async def debug_score_invoice(invoice_id: str) -> Dict[str, Any]:
 
     return {
         "ok": True,
-        "org_id": str(org_id),
+        "org_id": user_ctx.org_id,
         "invoice_id": str(invoice_id),
         "alert_count": len(alerts_payload),
         "alerts": alerts_payload,

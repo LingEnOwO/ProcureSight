@@ -1,4 +1,4 @@
-import { api } from "@/lib/apiClient";
+import { serverFetch } from "@/lib/serverApiClient";
 
 export const dynamic = "force-dynamic";
 
@@ -40,7 +40,8 @@ function pickCreatedAtLike(obj: UnknownRecord): string {
 export default async function Page() {
   const title = "Vendors";
 
-  const { data, error, response } = await api.GET("/vendors");
+  const response = await serverFetch("/vendors");
+  const data = await response.json();
 
   const raw = data as unknown;
   const items =
@@ -54,7 +55,7 @@ export default async function Page() {
         <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
           <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>{title}</h1>
           <span style={{ fontSize: 13, opacity: 0.7 }}>
-            {error ? "" : `${vendors.length} total`}
+            {vendors.length} total
           </span>
         </div>
         <div style={{ fontSize: 13, opacity: 0.75, marginTop: 6 }}>
@@ -62,27 +63,7 @@ export default async function Page() {
         </div>
       </header>
 
-      {error ? (
-        <section
-          style={{
-            border: "1px solid #fecaca",
-            background: "#fff1f2",
-            borderRadius: 12,
-            padding: 14,
-          }}
-        >
-          <div style={{ fontWeight: 700, color: "#9f1239" }}>
-            Failed to load vendors
-          </div>
-          <pre style={{ marginTop: 10, whiteSpace: "pre-wrap", fontSize: 12 }}>
-            {JSON.stringify(error, null, 2)}
-          </pre>
-          <div style={{ marginTop: 10, fontSize: 12, opacity: 0.85 }}>
-            Check that the backend is running and <code>NEXT_PUBLIC_API_URL</code> is
-            correct.
-          </div>
-        </section>
-      ) : vendors.length === 0 ? (
+      {vendors.length === 0 ? (
         <section
           style={{
             border: "1px solid #e5e7eb",

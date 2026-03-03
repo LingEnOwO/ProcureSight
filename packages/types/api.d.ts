@@ -37,7 +37,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Ingest */
+        /**
+         * Ingest
+         * @description Ingest file upload. Org context derived from authenticated user's JWT.
+         */
         post: operations["ingest_api_ingest_post"];
         delete?: never;
         options?: never;
@@ -182,7 +185,7 @@ export interface paths {
          * List Alerts
          * @description List alerts for the current org with optional filtering.
          *
-         *     Always scopes results to the current org (derived from settings.ORG_ID).
+         *     Org context derived from authenticated user's JWT.
          */
         get: operations["list_alerts_alerts__get"];
         put?: never;
@@ -259,8 +262,6 @@ export interface components {
              * Format: binary
              */
             file: string;
-            /** Org Id */
-            org_id?: string | null;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -419,7 +420,9 @@ export interface operations {
     ingest_api_ingest_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                cookie?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -475,7 +478,9 @@ export interface operations {
                 limit?: number;
                 offset?: number;
             };
-            header?: never;
+            header?: {
+                cookie?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -504,7 +509,9 @@ export interface operations {
     create_invoices_invoices_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                cookie?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -537,7 +544,9 @@ export interface operations {
     get_invoice_invoices__invoice_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                cookie?: string | null;
+            };
             path: {
                 invoice_id: string;
             };
@@ -568,7 +577,9 @@ export interface operations {
     patch_invoice_invoices__invoice_id__patch: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                cookie?: string | null;
+            };
             path: {
                 invoice_id: string;
             };
@@ -606,7 +617,9 @@ export interface operations {
                 limit?: number;
                 offset?: number;
             };
-            header?: never;
+            header?: {
+                cookie?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -635,7 +648,9 @@ export interface operations {
     get_vendor_by_id_vendors__vendor_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                cookie?: string | null;
+            };
             path: {
                 vendor_id: string;
             };
@@ -668,7 +683,9 @@ export interface operations {
             query?: {
                 raw_doc_id?: number | null;
             };
-            header?: never;
+            header?: {
+                cookie?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -701,9 +718,11 @@ export interface operations {
     extract_unstructured_extract_unstructured_post: {
         parameters: {
             query?: {
-                raw_doc_id?: number | null;
+                raw_doc_id?: string | null;
             };
-            header?: never;
+            header?: {
+                cookie?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -745,7 +764,9 @@ export interface operations {
                 /** @description Pagination offset */
                 offset?: number;
             };
-            header?: never;
+            header?: {
+                cookie?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -774,7 +795,9 @@ export interface operations {
     patch_alert_alerts__alert_id__patch: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                cookie?: string | null;
+            };
             path: {
                 alert_id: string;
             };

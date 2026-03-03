@@ -4,10 +4,9 @@ from databases import Database
 
 from apps.api.settings import settings
 
-pool = ConnectionPool(conninfo=settings.DATABASE_URL, min_size=1, max_size=10)
+pool = ConnectionPool(conninfo=settings.app_db_url, min_size=1, max_size=10)
 
-# Async DB handle (used by async routes/services, e.g. anomaly scoring).
-# This can coexist with the sync psycopg pool while we incrementally migrate.
+# Async DB handle used by the scoring pipeline (extract routes).
 database = Database(settings.DATABASE_URL)
 
 

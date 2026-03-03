@@ -21,8 +21,13 @@ CREATE TABLE IF NOT EXISTS users (
   org_id UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
   email TEXT NOT NULL UNIQUE,
   role TEXT NOT NULL,
+  nextauth_user_id TEXT UNIQUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Comment for NextAuth linkage
+COMMENT ON COLUMN public.users.nextauth_user_id IS
+  'Links to nextauth.users.id for authentication identity. Populated on first login.';
 
 -- Vendors
 CREATE TABLE IF NOT EXISTS vendors (
@@ -247,6 +252,18 @@ BEGIN
   END IF;
 END;
 $body$;
+
+-- === App role for FastAPI (non-superuser so RLS is enforced) ===
+-- The 'procure' superuser bypasses RLS; app_user respects all policies.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_user') THEN
+    CREATE ROLE app_user LOGIN PASSWORD 'app_password';
+  END IF;
+END $$;
+
+GRANT USAGE ON SCHEMA public TO app_user;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_user;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_user;
 """
 with psycopg.connect(DATABASE_URL) as conn:
     with conn.cursor() as cur:
