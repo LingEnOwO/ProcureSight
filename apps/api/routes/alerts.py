@@ -14,7 +14,7 @@ router = APIRouter(prefix="/alerts", tags=["alerts"])
 
 def get_conn(user_ctx: UserContext):
     """Create database connection with RLS context set from authenticated user."""
-    conn = connect(settings.DATABASE_URL)
+    conn = connect(settings.app_db_url)
     with conn.cursor() as cur:
         cur.execute("SELECT set_config('app.org_id', %s, true)", (user_ctx.org_id,))
         cur.execute("SELECT set_config('app.actor_id', %s, true)", (user_ctx.business_user_id,))

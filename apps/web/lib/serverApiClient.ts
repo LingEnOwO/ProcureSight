@@ -50,6 +50,7 @@ export async function serverFetch(path: string, options: RequestInit = {}) {
 
   const response = await fetch(url, {
     ...options,
+    cache: 'no-store', // Never cache — responses are user/org-specific
     headers,
   });
 

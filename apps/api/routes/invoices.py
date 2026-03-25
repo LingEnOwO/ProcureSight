@@ -18,7 +18,7 @@ router = APIRouter(prefix="/invoices", tags=["invoices"])
 
 def get_conn(user_ctx: UserContext):
     """Create database connection with RLS context set from authenticated user."""
-    conn = connect(settings.DATABASE_URL)
+    conn = connect(settings.app_db_url)
     with conn.cursor() as cur:
         # Set RLS context from JWT claims
         cur.execute("SELECT set_config('app.org_id', %s, true)", (user_ctx.org_id,))
