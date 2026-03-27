@@ -1,9 +1,6 @@
 import logging
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
-from psycopg import Connection
-from contextlib import contextmanager
-from typing import Iterator
 from pydantic import ValidationError
 
 from ..auth import get_user_context, UserContext
@@ -20,34 +17,11 @@ from ..services.alert_notifications import (
 )
 from ..models.invoice import Invoice
 from ..settings import settings
-from ..db import database, pool
+from ..db import pool, async_pool
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/extract", tags=["extraction"])
-
-
-@contextmanager
-def get_conn(org_id: str) -> Iterator[Connection]:
-    """Borrow a pooled Postgres connection and set per-request org context."""
-    with pool.connection() as conn:
-        # Persist org context for the whole connection while it's checked out.
-        with conn.cursor() as cur:
-            cur.execute("SELECT set_config('app.org_id', %s, false)", (org_id,))
-        yield conn
-
-
-async def _set_async_org_context(org_id: str) -> None:
-    """Set org context for the async DB session used by scoring (best-effort)."""
-    try:
-        await database.execute(
-            query="SELECT set_config('app.org_id', :org_id, true)",
-            values={"org_id": org_id},
-        )
-    except Exception:
-        # If the DB doesn't use this GUC or the driver/pool behaves differently,
-        # scoring queries should still work because they also filter by org_id.
-        logger.debug("Unable to set async org context", exc_info=True)
 
 
 @router.post("/structured")
@@ -96,26 +70,28 @@ async def extract_structured(
             raise HTTPException(status_code=422, detail=ve.errors())
         invoice_ids: list[str] = []
         for inv in invoices:
-            with get_conn(org_id) as conn:
-                with conn.transaction():
-                    vendor_id = ensure_vendor(conn, org_id, inv.vendor)
-                    invoice_id = upsert_invoice(conn, org_id, vendor_id, inv.dict(), raw_doc_id)
-                    replace_lines(conn, invoice_id, [ln.dict() for ln in inv.lines])
+            with pool.connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT set_config('app.org_id', %s, true)", (org_id,))
+                vendor_id = ensure_vendor(conn, org_id, inv.vendor)
+                invoice_id = upsert_invoice(conn, org_id, vendor_id, inv.dict(), raw_doc_id)
+                replace_lines(conn, invoice_id, [ln.dict() for ln in inv.lines])
             invoice_ids.append(str(invoice_id))
 
-        # Scoring must run after the invoice/line writes are committed. We also set
-        # org context for the async DB session used by scoring.
-        await _set_async_org_context(str(org_id))
+        # Scoring must run after the invoice/line writes are committed.
         for iid in invoice_ids:
-            candidates = await score_invoice(
-                database,
-                org_id=str(org_id),
-                invoice_id=str(iid),
-            )
+            async with async_pool.connection() as aconn:
+                await aconn.execute("SELECT set_config('app.org_id', %s, true)", (str(org_id),))
+                candidates = await score_invoice(
+                    aconn,
+                    org_id=str(org_id),
+                    invoice_id=str(iid),
+                )
             if candidates:
-                with get_conn(org_id) as conn:
-                    with conn.transaction():
-                        insert_alert_candidates(conn, candidates)
+                with pool.connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT set_config('app.org_id', %s, true)", (org_id,))
+                    insert_alert_candidates(conn, candidates)
 
             invoice_url = build_invoice_link(str(iid))
             for cand in candidates:
@@ -168,29 +144,27 @@ async def extract_structured(
         except ValidationError as ve:
             raise HTTPException(status_code=422, detail=ve.errors())
 
-        with get_conn(org_id) as conn:
-            with conn.transaction():
-                vendor_id = ensure_vendor(conn, org_id, inv.vendor)
-                invoice_id = upsert_invoice(conn, org_id, vendor_id, inv.dict(), raw_doc_id)
-                replace_lines(conn, invoice_id, [ln.dict() for ln in inv.lines])
+        with pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT set_config('app.org_id', %s, true)", (org_id,))
+            vendor_id = ensure_vendor(conn, org_id, inv.vendor)
+            invoice_id = upsert_invoice(conn, org_id, vendor_id, inv.dict(), raw_doc_id)
+            replace_lines(conn, invoice_id, [ln.dict() for ln in inv.lines])
 
         # Run scoring after commit so scoring can see the inserted invoice/lines.
-        await _set_async_org_context(str(org_id))
-        candidates = await score_invoice(
-            database,
-            org_id=str(org_id),
-            invoice_id=str(invoice_id),
-        )
+        async with async_pool.connection() as aconn:
+            await aconn.execute("SELECT set_config('app.org_id', %s, true)", (str(org_id),))
+            candidates = await score_invoice(
+                aconn,
+                org_id=str(org_id),
+                invoice_id=str(invoice_id),
+            )
         logger.warning("candidate_count=%d", len(candidates))
         if candidates:
-            with get_conn(org_id) as conn:
-                logger.warning(
-                    "About to insert alert candidates | conn.closed=%s | candidate_count=%s",
-                    conn.closed,
-                    len(candidates),
-                )
-                with conn.transaction():
-                    insert_alert_candidates(conn, candidates)
+            with pool.connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT set_config('app.org_id', %s, true)", (org_id,))
+                insert_alert_candidates(conn, candidates)
 
         invoice_url = build_invoice_link(str(invoice_id))
         for cand in candidates:
@@ -267,23 +241,26 @@ async def extract_unstructured(
     review_flag = needs_review(report)
     inv = report.normalized_invoice
 
-    with get_conn(org_id) as conn:
-        with conn.transaction():
-            vendor_id = ensure_vendor(conn, org_id, inv.vendor)
-            invoice_id = upsert_invoice(conn, org_id, vendor_id, inv.dict(), raw_doc_id)
-            replace_lines(conn, invoice_id, [ln.dict() for ln in inv.lines])
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT set_config('app.org_id', %s, true)", (org_id,))
+        vendor_id = ensure_vendor(conn, org_id, inv.vendor)
+        invoice_id = upsert_invoice(conn, org_id, vendor_id, inv.dict(), raw_doc_id)
+        replace_lines(conn, invoice_id, [ln.dict() for ln in inv.lines])
 
     # Run scoring after commit so scoring can see the inserted invoice/lines.
-    await _set_async_org_context(str(org_id))
-    candidates = await score_invoice(
-        database,
-        org_id=str(org_id),
-        invoice_id=str(invoice_id),
-    )
+    async with async_pool.connection() as aconn:
+        await aconn.execute("SELECT set_config('app.org_id', %s, true)", (str(org_id),))
+        candidates = await score_invoice(
+            aconn,
+            org_id=str(org_id),
+            invoice_id=str(invoice_id),
+        )
     if candidates:
-        with get_conn(org_id) as conn:
-            with conn.transaction():
-                insert_alert_candidates(conn, candidates)
+        with pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT set_config('app.org_id', %s, true)", (org_id,))
+            insert_alert_candidates(conn, candidates)
 
     invoice_url = build_invoice_link(str(invoice_id))
     for cand in candidates:

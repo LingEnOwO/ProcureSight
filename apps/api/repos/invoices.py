@@ -5,15 +5,23 @@ from decimal import Decimal
 # Ensures that a vendor record exists for a given organization and returns its ID.
 # Avoids duplicate vendor creation by using ON CONFLICT to upsert.
 def ensure_vendor(conn: Connection, org_id: str, name: str) -> str:
-    sql = """
-    INSERT INTO vendors (id, org_id, name, created_at)
-    VALUES (gen_random_uuid(), %(org_id)s, %(name)s, now())
-    ON CONFLICT (org_id, name) DO UPDATE SET name = EXCLUDED.name
-    RETURNING id;
-    """
+    params = {"org_id": org_id, "name": name}
     with conn.cursor() as cur:
-        cur.execute(sql, {"org_id": org_id, "name": name})
-        return cur.fetchone()[0] # Returns the vendor’s UUID 
+        cur.execute("""
+            INSERT INTO vendors (id, org_id, name, created_at)
+            VALUES (gen_random_uuid(), %(org_id)s, %(name)s, now())
+            ON CONFLICT (org_id, name) DO NOTHING
+            RETURNING id;
+        """, params)
+        row = cur.fetchone()
+        if row:
+            return row[0]
+        # Vendor already existed — fetch its id via SELECT
+        cur.execute(
+            "SELECT id FROM vendors WHERE org_id = %(org_id)s AND name = %(name)s",
+            params,
+        )
+        return cur.fetchone()[0]
 
 # Inserts or updates an invoice (upsert) for a given vendor/org based on invoice_no.
 # Prevents duplicates and ensures invoice data stays consistent when reprocessed.

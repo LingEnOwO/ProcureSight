@@ -35,7 +35,14 @@ export async function POST(request: NextRequest) {
       body: formData,
     });
     
-    const data = await response.json();
+    let data: any;
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      data = await response.json();
+    } else {
+      const text = await response.text();
+      data = { detail: text || 'Unknown error from backend' };
+    }
     return NextResponse.json(data, { status: response.status });
     
   } catch (error: any) {

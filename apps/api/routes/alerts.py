@@ -1,24 +1,14 @@
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Depends
-from psycopg import Connection, connect
 from pydantic import BaseModel
 
+from ..db import pool
 from ..repos.alerts import list_alerts_for_org, update_alert_status
-from ..settings import settings
 from ..auth import get_user_context, UserContext
 
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
-
-
-def get_conn(user_ctx: UserContext):
-    """Create database connection with RLS context set from authenticated user."""
-    conn = connect(settings.app_db_url)
-    with conn.cursor() as cur:
-        cur.execute("SELECT set_config('app.org_id', %s, true)", (user_ctx.org_id,))
-        cur.execute("SELECT set_config('app.actor_id', %s, true)", (user_ctx.business_user_id,))
-    return conn
 
 
 class AlertUpdatePayload(BaseModel):
@@ -47,19 +37,18 @@ def list_alerts(
 
     Org context derived from authenticated user's JWT.
     """
-    conn = get_conn(user_ctx)
-    try:
-        with conn:
-            items = list_alerts_for_org(
-                conn,
-                org_id=user_ctx.org_id,
-                status=status,
-                severity=severity,
-                limit=limit,
-                offset=offset,
-            )
-    finally:
-        conn.close()
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT set_config('app.org_id', %s, true)", (user_ctx.org_id,))
+            cur.execute("SELECT set_config('app.actor_id', %s, true)", (user_ctx.business_user_id,))
+        items = list_alerts_for_org(
+            conn,
+            org_id=user_ctx.org_id,
+            status=status,
+            severity=severity,
+            limit=limit,
+            offset=offset,
+        )
 
     return {
         "items": items,
@@ -79,18 +68,17 @@ def patch_alert(
     This is used by the UI to acknowledge or dismiss alerts. The org scope is
     enforced by always including the current org_id in the update query.
     """
-    conn = get_conn(user_ctx)
-    try:
-        with conn:
-            updated = update_alert_status(
-                conn,
-                org_id=user_ctx.org_id,
-                alert_id=alert_id,
-                status=payload.status,
-                acknowledged_by=payload.acknowledged_by,
-            )
-    finally:
-        conn.close()
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT set_config('app.org_id', %s, true)", (user_ctx.org_id,))
+            cur.execute("SELECT set_config('app.actor_id', %s, true)", (user_ctx.business_user_id,))
+        updated = update_alert_status(
+            conn,
+            org_id=user_ctx.org_id,
+            alert_id=alert_id,
+            status=payload.status,
+            acknowledged_by=payload.acknowledged_by,
+        )
 
     if updated is None:
         raise HTTPException(status_code=404, detail="Alert not found")

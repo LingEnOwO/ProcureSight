@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+from psycopg.rows import dict_row
+
 from apps.api.repos.invoice_stats import (
     get_vendor_sku_baseline_price,
     get_single_vendor_spend_stats,
@@ -63,13 +65,12 @@ async def _fetch_invoice_lines(
         FROM invoices AS i
         JOIN invoice_lines AS il
           ON il.invoice_id = i.id
-        WHERE i.org_id = :org_id
-          AND i.id = :invoice_id;
+        WHERE i.org_id = %(org_id)s
+          AND i.id = %(invoice_id)s;
     """
-    return await db.fetch_all(
-        query=query,
-        values={"org_id": org_id, "invoice_id": invoice_id},
-    )
+    async with db.cursor(row_factory=dict_row) as cur:
+        await cur.execute(query, {"org_id": org_id, "invoice_id": invoice_id})
+        return await cur.fetchall()
 
 
 async def _score_unit_price_deltas_for_invoice(
@@ -207,9 +208,9 @@ async def _find_potential_duplicate_invoices(
         return []
 
     base_conditions = [
-        "org_id = :org_id",
-        "vendor_id = :vendor_id",
-        "id <> :invoice_id",
+        "org_id = %(org_id)s",
+        "vendor_id = %(vendor_id)s",
+        "id <> %(invoice_id)s",
     ]
     values: Dict[str, Any] = {
         "org_id": org_id,
@@ -219,10 +220,10 @@ async def _find_potential_duplicate_invoices(
 
     match_clauses: List[str] = []
     if invoice_no is not None:
-        match_clauses.append("invoice_no = :invoice_no")
+        match_clauses.append("invoice_no = %(invoice_no)s")
         values["invoice_no"] = invoice_no
     if invoice_total is not None:
-        match_clauses.append("total = :invoice_total")
+        match_clauses.append("total = %(invoice_total)s")
         values["invoice_total"] = invoice_total
 
     where_clause = " AND ".join(base_conditions)
@@ -238,7 +239,9 @@ async def _find_potential_duplicate_invoices(
         FROM invoices
         WHERE {where_clause};
     """
-    return await db.fetch_all(query=query, values=values)
+    async with db.cursor(row_factory=dict_row) as cur:
+        await cur.execute(query, values)
+        return await cur.fetchall()
 
 # Vendor-level volume spike rule
 async def _score_vendor_volume_spikes_for_invoice(
