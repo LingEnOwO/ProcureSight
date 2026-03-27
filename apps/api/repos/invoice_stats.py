@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+import psycopg
+from psycopg.rows import dict_row
+
 
 # NOTE:
 # - These helpers are intentionally lightweight and do not assume a specific DB
@@ -59,20 +62,20 @@ async def get_vendor_unit_price_stats(
         `org_id`, `vendor_id`, `sku`, `desc`, `sample_size`,
         `median_unit_price`, and `mean_unit_price`.
     """
-    conditions = ["org_id = :org_id"]
+    conditions = ["org_id = %(org_id)s"]
     values: Dict[str, Any] = {"org_id": org_id}
 
     if vendor_id is not None:
-        conditions.append("vendor_id = :vendor_id")
+        conditions.append("vendor_id = %(vendor_id)s")
         values["vendor_id"] = vendor_id
 
     if sku is not None:
-        conditions.append("sku = :sku")
+        conditions.append("sku = %(sku)s")
         values["sku"] = sku
 
     if desc is not None:
         # `desc` is a reserved word; the view uses `\"desc\"` as the column name.
-        conditions.append('"desc" = :desc')
+        conditions.append('"desc" = %(desc)s')
         values["desc"] = desc
 
     where_clause = " AND ".join(conditions)
@@ -91,7 +94,9 @@ async def get_vendor_unit_price_stats(
         ORDER BY sample_size DESC;
     """
 
-    return await db.fetch_all(query=query, values=values)
+    async with db.cursor(row_factory=dict_row) as cur:
+        await cur.execute(query, values)
+        return await cur.fetchall()
 
 
 async def get_vendor_sku_baseline_price(
@@ -159,11 +164,11 @@ async def get_vendor_spend_stats(
         `org_id`, `vendor_id`, `invoice_count_30d`, `total_spend_30d`,
         `invoice_count_90d`, and `total_spend_90d`.
     """
-    conditions = ["org_id = :org_id"]
+    conditions = ["org_id = %(org_id)s"]
     values: Dict[str, Any] = {"org_id": org_id}
 
     if vendor_id is not None:
-        conditions.append("vendor_id = :vendor_id")
+        conditions.append("vendor_id = %(vendor_id)s")
         values["vendor_id"] = vendor_id
 
     where_clause = " AND ".join(conditions)
@@ -181,7 +186,9 @@ async def get_vendor_spend_stats(
         ORDER BY total_spend_90d DESC;
     """
 
-    return await db.fetch_all(query=query, values=values)
+    async with db.cursor(row_factory=dict_row) as cur:
+        await cur.execute(query, values)
+        return await cur.fetchall()
 
 
 async def get_single_vendor_spend_stats(

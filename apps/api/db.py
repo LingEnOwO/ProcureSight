@@ -1,25 +1,10 @@
-from psycopg_pool import ConnectionPool
+from psycopg_pool import ConnectionPool, AsyncConnectionPool
 from psycopg import sql
-from databases import Database
 
 from apps.api.settings import settings
 
 pool = ConnectionPool(conninfo=settings.app_db_url, min_size=1, max_size=10)
-
-# Async DB handle used by the scoring pipeline (extract routes).
-database = Database(settings.DATABASE_URL)
-
-
-async def connect_database() -> None:
-    """Connect the async Database pool on FastAPI startup."""
-    if not database.is_connected:
-        await database.connect()
-
-
-async def disconnect_database() -> None:
-    """Disconnect the async Database pool on FastAPI shutdown."""
-    if database.is_connected:
-        await database.disconnect()
+async_pool = AsyncConnectionPool(conninfo=settings.app_db_url, min_size=1, max_size=10, open=False)
 
 def get_raw_doc_by_hash(*, org_id: str, sha256: str):
     with pool.connection() as conn, conn.cursor() as cur:

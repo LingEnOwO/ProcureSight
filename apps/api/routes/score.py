@@ -1,17 +1,12 @@
 from dataclasses import asdict
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-from databases import Database
-from fastapi import APIRouter, Body, Depends, HTTPException
-from psycopg import connect
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-import httpx
-import logging
 
 from apps.api.auth import get_user_context, UserContext
+from apps.api.db import async_pool
 from apps.api.services.anomaly_scoring import AlertCandidate, score_invoice
-from apps.api.settings import settings
 
 router = APIRouter(prefix="/score", tags=["scoring"])
 
@@ -33,19 +28,13 @@ async def debug_score_invoice(
       - After backfilling historical data.
       - When investigating why a particular invoice was or was not flagged.
     """
-    # Run scoring against the existing DB state using a temporary Database
-    # instance. This keeps the debug endpoint self-contained and avoids
-    # coupling it to any particular connection pool implementation.
-    db = Database(settings.DATABASE_URL)
-    await db.connect()
-    try:
+    async with async_pool.connection() as aconn:
+        await aconn.execute("SELECT set_config('app.org_id', %s, true)", (str(user_ctx.org_id),))
         alerts: List[AlertCandidate] = await score_invoice(
-            db,
+            aconn,
             org_id=user_ctx.org_id,
             invoice_id=str(invoice_id),
         )
-    finally:
-        await db.disconnect()
 
     # Convert dataclass instances to plain dicts so they are JSON-serializable.
     alerts_payload: List[Dict[str, Any]] = [asdict(alert) for alert in alerts]
