@@ -47,7 +47,7 @@ AI-assisted invoice processing and anomaly detection system designed for small-t
 │  GET  /events (SSE)                                             │
 └────────────────────────────┬────────────────────────────────────┘
                              │
-                             │ psycopg (direct connection)
+                             │ psycopg3 connection pools (sync + async)
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                         PostgreSQL                              │
@@ -83,7 +83,7 @@ A user uploads an invoice (PDF, CSV, or JSON) through the web app. The ingestion
 - ✅ **Rule-based anomaly detection** using vendor unit price baselines, spend spike detection, and duplicate invoice heuristics
 - ✅ **Alerts system** with Postgres storage, Slack webhook notifications, and SSE real-time events
 - ✅ **Alert APIs** for filtered listing (`GET /alerts`) and status updates (`PATCH /alerts/{id}`)
-- ✅ **Multi-tenant data isolation** via `org_id` scoping on all queries, enforced through trusted headers from the Next.js gateway. Postgres RLS is enabled and enforced for sync routes (`/vendors`, `/invoices`, `/alerts`, `/ingest`) via a non-superuser `app_user` role; the async scoring pipeline still connects as superuser (RLS bypassed there, but queries filter by `org_id` explicitly)
+- ✅ **Multi-tenant data isolation** via `org_id` scoping on all queries, enforced through trusted headers from the Next.js gateway. Postgres RLS is enabled and enforced across all routes (sync and async scoring pipeline) via a non-superuser `app_user` role with `app.org_id` GUC-based tenant isolation
 
 **Frontend (Next.js + TypeScript):**
 
@@ -133,6 +133,9 @@ make up
 
 # Create database schema
 make seed
+
+# Apply missing RLS write policies (run once after seed)
+psql $DATABASE_URL -f scripts/add_rls_write_policies.sql
 
 # Start FastAPI server
 uvicorn apps.api.main:app --reload --port 8000
