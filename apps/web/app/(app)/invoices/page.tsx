@@ -34,7 +34,11 @@ function pickCurrencyLike(obj: UnknownRecord): string {
 
 function pickTotalLike(obj: UnknownRecord): string {
   const v = obj.total ?? obj.amount_total;
-  return typeof v === "number" ? v.toFixed(2) : typeof v === "string" ? v : "";
+  return typeof v === "number"
+    ? v.toFixed(2)
+    : typeof v === "string"
+      ? v
+      : "";
 }
 
 function pickVendorIdLike(obj: UnknownRecord): string {
@@ -47,14 +51,23 @@ function pickInvoiceDateLike(obj: UnknownRecord): string {
   return typeof v === "string" ? v : "";
 }
 
-export default async function Page() {
-  const title = "Invoices";
+function StatusBadge({ status }: { status: string }) {
+  if (!status || status === "—") return <span style={{ color: "var(--text-muted)" }}>—</span>;
+  const s = status.toLowerCase();
+  let cls = "badge badge-gray";
+  if (s === "paid") cls = "badge badge-green";
+  else if (s === "pending") cls = "badge badge-yellow";
+  else if (s === "overdue") cls = "badge badge-red";
+  else if (s === "processing") cls = "badge badge-blue";
+  else if (s === "cancelled" || s === "canceled") cls = "badge badge-gray";
+  return <span className={cls}>{status}</span>;
+}
 
+export default async function Page() {
   const response = await serverFetch("/invoices");
   const data = await response.json();
 
   const raw = data as unknown;
-  // invoices commonly come back as { items, limit, offset }
   const items =
     asArray(asObject(raw).items).length > 0
       ? asArray(asObject(raw).items)
@@ -63,67 +76,63 @@ export default async function Page() {
   const invoices = items.map(asObject);
 
   return (
-    <main style={{ padding: 24 }}>
-      <header style={{ marginBottom: 16 }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
-          <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>{title}</h1>
-          <span style={{ fontSize: 13, opacity: 0.7 }}>
+    <div>
+      <div className="page-header">
+        <div style={{ display: "flex", alignItems: "baseline", gap: "0.625rem" }}>
+          <h1 className="page-title">Invoices</h1>
+          <span
+            style={{
+              fontSize: "0.8125rem",
+              color: "var(--text-muted)",
+              fontWeight: 500,
+            }}
+          >
             {invoices.length} total
           </span>
         </div>
-        <div style={{ fontSize: 13, opacity: 0.75, marginTop: 6 }}>
-          Data source: <code>GET /invoices</code> (HTTP {response.status})
-        </div>
-      </header>
+        <p className="page-subtitle">All ingested invoices and their details</p>
+      </div>
 
       {invoices.length === 0 ? (
-        <section
-          style={{
-            border: "1px solid #e5e7eb",
-            borderRadius: 12,
-            padding: 14,
-          }}
-        >
-          <div style={{ fontWeight: 700, marginBottom: 6 }}>No invoices yet</div>
-          <div style={{ fontSize: 13, opacity: 0.75 }}>
-            Once you ingest documents, invoices will appear here.
+        <div className="table-wrapper">
+          <div className="empty-state">
+            <div className="empty-icon">
+              <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+                <rect x="2" y="1" width="14" height="18" rx="2" stroke="currentColor" strokeWidth="1.5" />
+                <path
+                  d="M6 7h8M6 10.5h8M6 14h5"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </div>
+            <div className="empty-title">No invoices yet</div>
+            <p className="empty-desc">
+              Once you ingest documents, invoices will appear here.
+            </p>
           </div>
-        </section>
+        </div>
       ) : (
-        <section
-          style={{
-            border: "1px solid #e5e7eb",
-            borderRadius: 12,
-            overflow: "hidden",
-          }}
-        >
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <div className="table-wrapper">
+          <table>
             <thead>
-              <tr style={{ background: "#f9fafb" }}>
-                <th style={{ textAlign: "left", padding: 12, fontSize: 12, opacity: 0.75 }}>
-                  Invoice #
-                </th>
-                <th style={{ textAlign: "left", padding: 12, fontSize: 12, opacity: 0.75 }}>
-                  Status
-                </th>
-                <th style={{ textAlign: "left", padding: 12, fontSize: 12, opacity: 0.75 }}>
-                  Total
-                </th>
-                <th style={{ textAlign: "left", padding: 12, fontSize: 12, opacity: 0.75 }}>
-                  Currency
-                </th>
-                <th style={{ textAlign: "left", padding: 12, fontSize: 12, opacity: 0.75 }}>
-                  Invoice date
-                </th>
-                <th style={{ textAlign: "left", padding: 12, fontSize: 12, opacity: 0.75 }}>
-                  Vendor ID
-                </th>
+              <tr>
+                <th>Invoice #</th>
+                <th>Status</th>
+                <th>Total</th>
+                <th>Currency</th>
+                <th>Invoice Date</th>
+                <th>Vendor ID</th>
               </tr>
             </thead>
             <tbody>
               {invoices.map((inv, idx) => {
                 const id = pickIdLike(inv) || String(idx);
-                const invoiceNo = pickInvoiceNoLike(inv) || pickIdLike(inv) || `Invoice #${idx + 1}`;
+                const invoiceNo =
+                  pickInvoiceNoLike(inv) ||
+                  pickIdLike(inv) ||
+                  `Invoice #${idx + 1}`;
                 const status = pickStatusLike(inv) || "—";
                 const total = pickTotalLike(inv) || "—";
                 const currency = pickCurrencyLike(inv) || "—";
@@ -131,25 +140,48 @@ export default async function Page() {
                 const vendorId = pickVendorIdLike(inv) || "—";
 
                 return (
-                  <tr key={id} style={{ borderTop: "1px solid #e5e7eb" }}>
-                    <td style={{ padding: 12, fontSize: 13, fontWeight: 600 }}>{invoiceNo}</td>
-                    <td style={{ padding: 12, fontSize: 13 }}>{status}</td>
-                    <td style={{ padding: 12, fontSize: 13 }}>{total}</td>
-                    <td style={{ padding: 12, fontSize: 13 }}>{currency}</td>
-                    <td style={{ padding: 12, fontSize: 13 }}>{invoiceDate}</td>
-                    <td style={{ padding: 12, fontSize: 13 }}>{vendorId}</td>
+                  <tr key={id}>
+                    <td>
+                      <span style={{ fontWeight: 600, fontFamily: "monospace", fontSize: "0.8125rem" }}>
+                        {invoiceNo}
+                      </span>
+                    </td>
+                    <td>
+                      <StatusBadge status={status} />
+                    </td>
+                    <td>
+                      {total !== "—" ? (
+                        <span style={{ fontWeight: 600 }}>{total}</span>
+                      ) : (
+                        <span style={{ color: "var(--text-muted)" }}>—</span>
+                      )}
+                    </td>
+                    <td>
+                      <span style={{ color: total !== "—" ? "var(--text-secondary)" : "var(--text-muted)" }}>
+                        {currency}
+                      </span>
+                    </td>
+                    <td style={{ color: "var(--text-secondary)" }}>
+                      {invoiceDate}
+                    </td>
+                    <td>
+                      <span
+                        style={{
+                          fontFamily: "monospace",
+                          fontSize: "0.8125rem",
+                          color: "var(--text-muted)",
+                        }}
+                      >
+                        {vendorId}
+                      </span>
+                    </td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
-        </section>
+        </div>
       )}
-
-      {/*
-        Debug helper (keep commented):
-        <pre>{JSON.stringify(data ?? null, null, 2)}</pre>
-      */}
-    </main>
+    </div>
   );
 }

@@ -29,9 +29,6 @@ function pickTitleLike(obj: UnknownRecord): string {
 }
 
 export default async function Page() {
-  // Phase 3D-3 goal: show a real dashboard shell + prove we can fetch real domain data.
-  // We DO NOT call every endpoint; we only pull a couple key collections.
-  // Use server-side API client since this is a Server Component
   const [vendorsData, invoicesData] = await Promise.all([
     serverGet("/vendors").catch(() => null),
     serverGet("/invoices").catch(() => null),
@@ -40,7 +37,6 @@ export default async function Page() {
   const vendorsError = !vendorsData;
   const invoicesError = !invoicesData;
 
-  // Many APIs return either an array or an object like { items: [...] }
   const vendorsItems =
     asArray(vendorsData).length > 0
       ? asArray(vendorsData)
@@ -60,146 +56,203 @@ export default async function Page() {
   const hasAnyError = Boolean(vendorsError || invoicesError);
 
   return (
-    <main style={{ padding: 24 }}>
-      <header style={{ marginBottom: 16 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 600, marginBottom: 6 }}>Dashboard</h1>
-        <div style={{ fontSize: 13, opacity: 0.75 }}>
-          Overview of vendors and invoices
-        </div>
-      </header>
+    <div>
+      <div className="page-header">
+        <h1 className="page-title">Dashboard</h1>
+        <p className="page-subtitle">Overview of your procurement activity</p>
+      </div>
 
       {/* KPI cards */}
-      <section
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-          gap: 12,
-          marginBottom: 16,
-        }}
-      >
-        <a
-          href="/vendors"
-          style={{
-            border: "1px solid #e5e7eb",
-            borderRadius: 12,
-            padding: 14,
-            color: "inherit",
-            textDecoration: "none",
-            display: "block",
-          }}
-          aria-label="Go to Vendors"
-        >
-          <div style={{ fontSize: 12, opacity: 0.7 }}>Vendors</div>
-          <div style={{ fontSize: 22, fontWeight: 700, marginTop: 6 }}>{vendorCount}</div>
-          <div style={{ fontSize: 12, opacity: 0.75, marginTop: 6 }}>View vendors</div>
-        </a>
-        <a
-          href="/invoices"
-          style={{
-            border: "1px solid #e5e7eb",
-            borderRadius: 12,
-            padding: 14,
-            color: "inherit",
-            textDecoration: "none",
-            display: "block",
-          }}
-          aria-label="Go to Invoices"
-        >
-          <div style={{ fontSize: 12, opacity: 0.7 }}>Invoices</div>
-          <div style={{ fontSize: 22, fontWeight: 700, marginTop: 6 }}>{invoiceCount}</div>
-          <div style={{ fontSize: 12, opacity: 0.75, marginTop: 6 }}>View invoices</div>
-        </a>
-      </section>
-
-      {/* Errors */}
-      {hasAnyError ? (
-        <section style={{ border: "1px solid #fecaca", background: "#fff1f2", borderRadius: 12, padding: 14, marginBottom: 16 }}>
-          <div style={{ fontWeight: 700, color: "#9f1239" }}>Some requests failed</div>
-          <div style={{ fontSize: 12, opacity: 0.85, marginTop: 6 }}>
-            This is expected while backend endpoints/auth are still in flux.
+      <div className="kpi-grid">
+        <a href="/vendors" className="kpi-card" aria-label="Go to Vendors">
+          <div
+            className="kpi-icon"
+            style={{ background: "#eff6ff", color: "#2563eb" }}
+          >
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+              <circle cx="6.5" cy="5.5" r="2.75" stroke="currentColor" strokeWidth="1.5" />
+              <path
+                d="M1 15c0-3 2.46-5 5.5-5s5.5 2 5.5 5"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
+              <circle cx="13.5" cy="5.5" r="2" stroke="currentColor" strokeWidth="1.25" opacity="0.5" />
+              <path
+                d="M16 15c0-2-1.2-3.2-2.5-3.75"
+                stroke="currentColor"
+                strokeWidth="1.25"
+                strokeLinecap="round"
+                opacity="0.5"
+              />
+            </svg>
           </div>
-          {vendorsError ? (
-            <pre style={{ marginTop: 10, whiteSpace: "pre-wrap", fontSize: 12 }}>
-              vendors error: {JSON.stringify(vendorsError, null, 2)}
-            </pre>
-          ) : null}
-          {invoicesError ? (
-            <pre style={{ marginTop: 10, whiteSpace: "pre-wrap", fontSize: 12 }}>
-              invoices error: {JSON.stringify(invoicesError, null, 2)}
-            </pre>
-          ) : null}
-        </section>
-      ) : null}
+          <div className="kpi-label">Total Vendors</div>
+          <div className="kpi-value">{vendorCount}</div>
+          <div className="kpi-footer">
+            View all vendors
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <path d="M2.5 6h7M7 3.5L9.5 6 7 8.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
+        </a>
+
+        <a href="/invoices" className="kpi-card" aria-label="Go to Invoices">
+          <div
+            className="kpi-icon"
+            style={{ background: "#faf5ff", color: "#9333ea" }}
+          >
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+              <rect x="2.5" y="1.5" width="13" height="15" rx="1.75" stroke="currentColor" strokeWidth="1.5" />
+              <path
+                d="M6 6.5h6M6 9.5h6M6 12.5h4"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                strokeLinecap="round"
+              />
+            </svg>
+          </div>
+          <div className="kpi-label">Total Invoices</div>
+          <div className="kpi-value">{invoiceCount}</div>
+          <div className="kpi-footer">
+            View all invoices
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <path d="M2.5 6h7M7 3.5L9.5 6 7 8.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
+        </a>
+      </div>
+
+      {/* Error banner */}
+      {hasAnyError && (
+        <div className="alert-banner error">
+          <div className="alert-title">Some data failed to load</div>
+          <div style={{ fontSize: "0.8125rem", opacity: 0.85 }}>
+            This may occur while the backend is starting up or endpoints are still being configured.
+          </div>
+        </div>
+      )}
 
       {/* Recent lists */}
-      <section
+      <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-          gap: 12,
+          gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
+          gap: "1rem",
         }}
       >
-        <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 14 }}>
-          <div style={{ fontWeight: 700, marginBottom: 10 }}>Recent vendors</div>
-          {recentVendors.length === 0 ? (
-            <div style={{ fontSize: 13, opacity: 0.75 }}>No vendors found.</div>
-          ) : (
-            <ul style={{ margin: 0, paddingLeft: 16 }}>
-              {recentVendors.map((v, idx) => {
-                const id = pickIdLike(v);
-                const label = pickTitleLike(v) || id || `Vendor #${idx + 1}`;
-                return (
-                  <li key={`${id || idx}`} style={{ marginBottom: 6 }}>
-                    <span style={{ fontSize: 13 }}>{label}</span>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </div>
-
-        <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 14 }}>
-          <div style={{ fontWeight: 700, marginBottom: 10 }}>Recent invoices</div>
-          {recentInvoices.length === 0 ? (
-            <div style={{ fontSize: 13, opacity: 0.75 }}>No invoices found.</div>
-          ) : (
-            <ul style={{ margin: 0, paddingLeft: 16 }}>
-              {recentInvoices.map((inv, idx) => {
-                const id = pickIdLike(inv);
-                const label = pickTitleLike(inv) || id || `Invoice #${idx + 1}`;
-                return (
-                  <li key={`${id || idx}`} style={{ marginBottom: 6 }}>
-                    <span style={{ fontSize: 13 }}>{label}</span>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </div>
-      </section>
-
-      {/* Debug (temporary)
-      
-      <details style={{ marginTop: 16 }}>
-        <summary style={{ cursor: "pointer", fontSize: 13, opacity: 0.85 }}>
-          Debug responses (temporary)
-        </summary>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
-          <div>
-            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>vendors</div>
-            <pre style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>
-              {JSON.stringify(vendorsData ?? null, null, 2)}
-            </pre>
-          </div>
-          <div>
-            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>invoices</div>
-            <pre style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>
-              {JSON.stringify(invoicesData ?? null, null, 2)}
-            </pre>
+        {/* Recent Vendors */}
+        <div className="card">
+          <div className="card-body">
+            <div className="section-header">
+              <span className="section-title">Recent Vendors</span>
+              <a href="/vendors" className="section-link">
+                View all
+              </a>
+            </div>
+            {recentVendors.length === 0 ? (
+              <div
+                style={{
+                  fontSize: "0.8125rem",
+                  color: "var(--text-muted)",
+                  padding: "0.75rem 0",
+                }}
+              >
+                No vendors yet.
+              </div>
+            ) : (
+              <div>
+                {recentVendors.map((v, idx) => {
+                  const id = pickIdLike(v);
+                  const label = pickTitleLike(v) || id || `Vendor #${idx + 1}`;
+                  const initial = label[0]?.toUpperCase() ?? "V";
+                  return (
+                    <div
+                      key={`${id || idx}`}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.625rem",
+                        padding: "0.5rem 0",
+                        borderBottom:
+                          idx < recentVendors.length - 1
+                            ? "1px solid var(--border-muted)"
+                            : "none",
+                      }}
+                    >
+                      <div className="vendor-avatar">{initial}</div>
+                      <span style={{ fontSize: "0.875rem" }}>{label}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
-      </details>
-      */}
-    </main>
+
+        {/* Recent Invoices */}
+        <div className="card">
+          <div className="card-body">
+            <div className="section-header">
+              <span className="section-title">Recent Invoices</span>
+              <a href="/invoices" className="section-link">
+                View all
+              </a>
+            </div>
+            {recentInvoices.length === 0 ? (
+              <div
+                style={{
+                  fontSize: "0.8125rem",
+                  color: "var(--text-muted)",
+                  padding: "0.75rem 0",
+                }}
+              >
+                No invoices yet.
+              </div>
+            ) : (
+              <div>
+                {recentInvoices.map((inv, idx) => {
+                  const id = pickIdLike(inv);
+                  const label =
+                    pickTitleLike(inv) || id || `Invoice #${idx + 1}`;
+                  return (
+                    <div
+                      key={`${id || idx}`}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        padding: "0.5rem 0",
+                        borderBottom:
+                          idx < recentInvoices.length - 1
+                            ? "1px solid var(--border-muted)"
+                            : "none",
+                      }}
+                    >
+                      <span style={{ fontSize: "0.875rem" }}>{label}</span>
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 14 14"
+                        fill="none"
+                        style={{ color: "var(--text-muted)", flexShrink: 0 }}
+                      >
+                        <path
+                          d="M3 7h8M8.5 4.5L11 7l-2.5 2.5"
+                          stroke="currentColor"
+                          strokeWidth="1.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

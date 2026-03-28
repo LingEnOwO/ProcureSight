@@ -41,14 +41,15 @@ export default function Page() {
       const ingestFormData = new FormData();
       ingestFormData.append("file", file);
 
-      // Call Next.js gateway route handler (not backend directly)
       const ingestRes = await fetch("/api/ingest", {
         method: "POST",
         body: ingestFormData,
       });
 
       if (!ingestRes.ok) {
-        const errorData = await ingestRes.json().catch(() => ({ detail: "Upload failed" }));
+        const errorData = await ingestRes
+          .json()
+          .catch(() => ({ detail: "Upload failed" }));
         setStatus("error");
         setErrorMessage(
           `Upload failed: ${errorData.detail || ingestRes.statusText}`
@@ -56,7 +57,7 @@ export default function Page() {
         return;
       }
 
-      await ingestRes.json(); // Consume response
+      await ingestRes.json();
       setStatus("uploaded");
       setStatusMessage("File uploaded successfully");
 
@@ -75,14 +76,15 @@ export default function Page() {
       const extractFormData = new FormData();
       extractFormData.append("file", file);
 
-      // Call Next.js gateway route handler for extraction
       const extractRes = await fetch(extractEndpoint, {
         method: "POST",
         body: extractFormData,
       });
 
       if (!extractRes.ok) {
-        const errorData = await extractRes.json().catch(() => ({ detail: "Extraction failed" }));
+        const errorData = await extractRes
+          .json()
+          .catch(() => ({ detail: "Extraction failed" }));
         setStatus("error");
         setErrorMessage(
           `Extraction failed: ${errorData.detail || extractRes.statusText}`
@@ -92,7 +94,6 @@ export default function Page() {
 
       const extractData = await extractRes.json();
 
-      // Success!
       setStatus("complete");
       setStatusMessage("Processing complete");
       setResultData(extractData);
@@ -104,169 +105,234 @@ export default function Page() {
 
   const isProcessing = status === "uploading" || status === "extracting";
 
-  return (
-    <main style={{ padding: 24 }}>
-      <header style={{ marginBottom: 16 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 6 }}>
-          Uploads
-        </h1>
-        <div style={{ fontSize: 13, opacity: 0.75 }}>
-          Upload files for ingestion and extraction
-        </div>
-      </header>
+  const steps: { key: UploadStatus | "uploaded"; label: string }[] = [
+    { key: "uploading", label: "Upload" },
+    { key: "extracting", label: "Extract" },
+    { key: "complete", label: "Done" },
+  ];
 
-      {/* File selection */}
-      <section
-        style={{
-          border: "1px solid #e5e7eb",
-          borderRadius: 12,
-          padding: 20,
-          marginBottom: 16,
-        }}
-      >
-        <div style={{ marginBottom: 12 }}>
-          <label
-            htmlFor="file-input"
+  function getStepState(stepKey: string) {
+    if (status === "complete") return "done";
+    if (status === "error") return "error";
+    if (stepKey === "uploading" && (status === "uploading" || status === "uploaded" || status === "extracting")) return "done";
+    if (stepKey === "extracting" && status === "extracting") return "active";
+    if (stepKey === "complete" && status === "complete") return "active";
+    return "pending";
+  }
+
+  return (
+    <div>
+      <div className="page-header">
+        <h1 className="page-title">Uploads</h1>
+        <p className="page-subtitle">
+          Upload and extract data from invoices and documents
+        </p>
+      </div>
+
+      {/* Upload card */}
+      <div className="upload-card">
+        <label
+          htmlFor="file-input"
+          className={`upload-drop-zone${file ? " has-file" : ""}`}
+          style={{ display: "block" }}
+        >
+          <div
             style={{
-              display: "block",
-              fontWeight: 600,
-              marginBottom: 8,
-              fontSize: 14,
+              color: "var(--text-muted)",
+              marginBottom: "0.625rem",
+              display: "flex",
+              justifyContent: "center",
             }}
           >
-            Select a file
-          </label>
-          <input
-            id="file-input"
-            type="file"
-            accept=".pdf,.csv,.json"
-            onChange={handleFileChange}
-            disabled={isProcessing}
-            style={{
-              display: "block",
-              width: "100%",
-              padding: 8,
-              border: "1px solid #d1d5db",
-              borderRadius: 6,
-              fontSize: 14,
-            }}
-          />
-          <div style={{ fontSize: 12, opacity: 0.7, marginTop: 6 }}>
-            Supported formats: PDF, CSV, JSON
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+              <rect width="32" height="32" rx="8" fill="var(--brand-light)" />
+              <path
+                d="M16 20V11M16 11L12 15M16 11L20 15"
+                stroke="var(--brand)"
+                strokeWidth="1.75"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <path
+                d="M10 23h12"
+                stroke="var(--brand)"
+                strokeWidth="1.75"
+                strokeLinecap="round"
+                opacity="0.5"
+              />
+            </svg>
           </div>
-        </div>
 
-        {file && (
-          <div style={{ fontSize: 13, marginBottom: 12 }}>
-            <strong>Selected:</strong> {file.name} ({(file.size / 1024).toFixed(1)} KB)
-          </div>
-        )}
+          {file ? (
+            <div>
+              <div
+                style={{
+                  fontWeight: 600,
+                  fontSize: "0.9375rem",
+                  color: "var(--brand-dark)",
+                  marginBottom: "0.25rem",
+                }}
+              >
+                {file.name}
+              </div>
+              <div style={{ fontSize: "0.8125rem", color: "var(--text-muted)" }}>
+                {(file.size / 1024).toFixed(1)} KB &middot; Click to change
+              </div>
+            </div>
+          ) : (
+            <div>
+              <div
+                style={{
+                  fontWeight: 600,
+                  fontSize: "0.9375rem",
+                  color: "var(--text-secondary)",
+                  marginBottom: "0.25rem",
+                }}
+              >
+                Click to select a file
+              </div>
+              <div style={{ fontSize: "0.8125rem", color: "var(--text-muted)" }}>
+                PDF, CSV, or JSON &mdash; up to any size
+              </div>
+            </div>
+          )}
+        </label>
+
+        <input
+          id="file-input"
+          type="file"
+          accept=".pdf,.csv,.json"
+          onChange={handleFileChange}
+          disabled={isProcessing}
+          style={{ display: "none" }}
+        />
 
         <button
           onClick={handleUpload}
           disabled={!file || isProcessing}
-          style={{
-            padding: "10px 20px",
-            backgroundColor: !file || isProcessing ? "#d1d5db" : "#3b82f6",
-            color: "white",
-            border: "none",
-            borderRadius: 6,
-            fontSize: 14,
-            fontWeight: 600,
-            cursor: !file || isProcessing ? "not-allowed" : "pointer",
-          }}
+          className="btn-primary"
+          style={{ width: "100%", justifyContent: "center" }}
         >
-          {isProcessing ? "Processing..." : "Upload"}
+          {isProcessing && <span className="spinner" />}
+          {isProcessing
+            ? status === "uploading"
+              ? "Uploading..."
+              : "Extracting..."
+            : "Upload & Extract"}
         </button>
-      </section>
+      </div>
 
-      {/* Status display */}
-      {statusMessage && (
-        <section
-          style={{
-            border: "1px solid #e5e7eb",
-            borderRadius: 12,
-            padding: 14,
-            marginBottom: 16,
-          }}
+      {/* Status steps */}
+      {status !== "idle" && (
+        <div
+          className="card"
+          style={{ marginBottom: "1.25rem" }}
         >
-          <div style={{ fontWeight: 600, marginBottom: 6, fontSize: 14 }}>
-            Status
+          <div className="card-body">
+            <div
+              style={{
+                fontSize: "0.8125rem",
+                fontWeight: 600,
+                color: "var(--text-secondary)",
+                marginBottom: "1rem",
+              }}
+            >
+              Processing status
+            </div>
+            <div className="status-steps">
+              {steps.map((step, idx) => {
+                const state = getStepState(step.key);
+                return (
+                  <>
+                    <div
+                      key={step.key}
+                      className={`status-step${state === "active" ? " active" : state === "done" ? " done" : ""}`}
+                    >
+                      {state === "done" ? (
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style={{ color: "#16a34a" }}>
+                          <circle cx="7" cy="7" r="6" fill="#dcfce7" />
+                          <path d="M4.5 7l2 2 3-3" stroke="#16a34a" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      ) : state === "active" ? (
+                        <span className="spinner" style={{ color: "var(--brand)" }} />
+                      ) : (
+                        <div className="status-dot" style={{ opacity: 0.3 }} />
+                      )}
+                      {step.label}
+                    </div>
+                    {idx < steps.length - 1 && (
+                      <div key={`divider-${idx}`} className="status-divider" />
+                    )}
+                  </>
+                );
+              })}
+            </div>
+            <div style={{ fontSize: "0.8125rem", color: "var(--text-muted)" }}>
+              {statusMessage}
+            </div>
           </div>
-          <div style={{ fontSize: 13 }}>
-            {status === "uploading" && "📤 Uploading file..."}
-            {status === "uploaded" && "✅ File uploaded successfully"}
-            {status === "extracting" && "⚙️ Extracting data..."}
-            {status === "complete" && "✅ Processing complete"}
-          </div>
-        </section>
+        </div>
       )}
 
-      {/* Success message */}
+      {/* Success */}
       {status === "complete" && (
-        <section
-          style={{
-            border: "1px solid #86efac",
-            background: "#f0fdf4",
-            borderRadius: 12,
-            padding: 14,
-            marginBottom: 16,
-          }}
-        >
-          <div style={{ fontWeight: 700, color: "#166534", marginBottom: 6 }}>
-            Success!
-          </div>
-          <div style={{ fontSize: 13, marginBottom: 8 }}>
-            File <strong>{file?.name}</strong> has been uploaded and processed.
+        <div className="alert-banner success">
+          <div className="alert-title">Processing complete</div>
+          <div style={{ fontSize: "0.8125rem", marginBottom: resultData ? "0.75rem" : 0 }}>
+            <strong>{file?.name}</strong> has been uploaded and processed
+            successfully.
           </div>
           {resultData && (
-            <details style={{ fontSize: 12, marginTop: 10 }}>
+            <details style={{ marginTop: "0.5rem" }}>
               <summary
-                style={{ cursor: "pointer", fontWeight: 600, opacity: 0.85 }}
+                style={{
+                  cursor: "pointer",
+                  fontWeight: 600,
+                  fontSize: "0.8125rem",
+                  opacity: 0.85,
+                  userSelect: "none",
+                }}
               >
-                View result data
+                View extracted data
               </summary>
               <pre
                 style={{
-                  marginTop: 8,
-                  padding: 8,
+                  marginTop: "0.625rem",
+                  padding: "0.75rem",
                   background: "white",
-                  borderRadius: 4,
+                  borderRadius: "var(--r-sm)",
                   overflow: "auto",
-                  maxHeight: 200,
+                  maxHeight: 240,
+                  fontSize: "0.75rem",
+                  lineHeight: 1.5,
+                  color: "var(--text-primary)",
+                  border: "1px solid #bbf7d0",
                 }}
               >
                 {JSON.stringify(resultData, null, 2)}
               </pre>
             </details>
           )}
-        </section>
+        </div>
       )}
 
-      {/* Error message */}
+      {/* Error */}
       {status === "error" && errorMessage && (
-        <section
-          style={{
-            border: "1px solid #fecaca",
-            background: "#fff1f2",
-            borderRadius: 12,
-            padding: 14,
-          }}
-        >
-          <div style={{ fontWeight: 700, color: "#9f1239", marginBottom: 6 }}>
-            Error
-          </div>
+        <div className="alert-banner error">
+          <div className="alert-title">Upload failed</div>
           <pre
             style={{
-              fontSize: 12,
+              fontSize: "0.8125rem",
               whiteSpace: "pre-wrap",
               wordBreak: "break-word",
+              margin: 0,
+              fontFamily: "inherit",
             }}
           >
             {errorMessage}
           </pre>
-        </section>
+        </div>
       )}
-    </main>
+    </div>
   );
 }
