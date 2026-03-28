@@ -46,14 +46,33 @@ function pickInvoiceRef(obj: UnknownRecord): string {
       : "—";
 }
 
-export default async function Page() {
-  const title = "Alerts";
+function SeverityBadge({ severity }: { severity: string }) {
+  if (!severity || severity === "—")
+    return <span style={{ color: "var(--text-muted)" }}>—</span>;
+  const s = severity.toLowerCase();
+  let cls = "badge badge-gray";
+  if (s === "critical" || s === "high") cls = "badge badge-red";
+  else if (s === "medium") cls = "badge badge-orange";
+  else if (s === "low") cls = "badge badge-yellow";
+  return <span className={cls}>{severity}</span>;
+}
 
+function StatusBadge({ status }: { status: string }) {
+  if (!status || status === "—")
+    return <span style={{ color: "var(--text-muted)" }}>—</span>;
+  const s = status.toLowerCase();
+  let cls = "badge badge-blue";
+  if (s === "open" || s === "active") cls = "badge badge-blue";
+  else if (s === "resolved") cls = "badge badge-green";
+  else if (s === "dismissed" || s === "acknowledged") cls = "badge badge-gray";
+  return <span className={cls}>{status}</span>;
+}
+
+export default async function Page() {
   const response = await serverFetch("/alerts/");
   const data = await response.json();
 
   const raw = data as unknown;
-  // Alerts might come back as { items, limit, offset } or just an array
   const items =
     asArray(asObject(raw).items).length > 0
       ? asArray(asObject(raw).items)
@@ -62,93 +81,60 @@ export default async function Page() {
   const alerts = items.map(asObject);
 
   return (
-    <main style={{ padding: 24 }}>
-      <header style={{ marginBottom: 16 }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
-          <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>{title}</h1>
-          <span style={{ fontSize: 13, opacity: 0.7 }}>
+    <div>
+      <div className="page-header">
+        <div style={{ display: "flex", alignItems: "baseline", gap: "0.625rem" }}>
+          <h1 className="page-title">Alerts</h1>
+          <span
+            style={{
+              fontSize: "0.8125rem",
+              color: "var(--text-muted)",
+              fontWeight: 500,
+            }}
+          >
             {alerts.length} total
           </span>
         </div>
-        <div style={{ fontSize: 13, opacity: 0.75, marginTop: 6 }}>
-          Data source: <code>GET /alerts</code> (HTTP {response.status})
-        </div>
-      </header>
+        <p className="page-subtitle">
+          Anomaly detections and spend deviation alerts
+        </p>
+      </div>
 
       {alerts.length === 0 ? (
-        <section
-          style={{
-            border: "1px solid #e5e7eb",
-            borderRadius: 12,
-            padding: 14,
-          }}
-        >
-          <div style={{ fontWeight: 700, marginBottom: 6 }}>No alerts yet</div>
-          <div style={{ fontSize: 13, opacity: 0.75 }}>
-            Once the anomaly detection pipeline runs, alerts will appear here.
+        <div className="table-wrapper">
+          <div className="empty-state">
+            <div className="empty-icon">
+              <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+                <path
+                  d="M11 2C8 2 5 4.5 5 8v4L3 14h16l-2-2V8c0-3.5-3-6-6-6z"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="M8.5 17a2.5 2.5 0 005 0"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </div>
+            <div className="empty-title">No alerts</div>
+            <p className="empty-desc">
+              Once the anomaly detection pipeline runs, alerts will appear here.
+            </p>
           </div>
-        </section>
+        </div>
       ) : (
-        <section
-          style={{
-            border: "1px solid #e5e7eb",
-            borderRadius: 12,
-            overflow: "hidden",
-          }}
-        >
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <div className="table-wrapper">
+          <table>
             <thead>
-              <tr style={{ background: "#f9fafb" }}>
-                <th
-                  style={{
-                    textAlign: "left",
-                    padding: 12,
-                    fontSize: 12,
-                    opacity: 0.75,
-                  }}
-                >
-                  Alert Type
-                </th>
-                <th
-                  style={{
-                    textAlign: "left",
-                    padding: 12,
-                    fontSize: 12,
-                    opacity: 0.75,
-                  }}
-                >
-                  Severity
-                </th>
-                <th
-                  style={{
-                    textAlign: "left",
-                    padding: 12,
-                    fontSize: 12,
-                    opacity: 0.75,
-                  }}
-                >
-                  Status
-                </th>
-                <th
-                  style={{
-                    textAlign: "left",
-                    padding: 12,
-                    fontSize: 12,
-                    opacity: 0.75,
-                  }}
-                >
-                  Created
-                </th>
-                <th
-                  style={{
-                    textAlign: "left",
-                    padding: 12,
-                    fontSize: 12,
-                    opacity: 0.75,
-                  }}
-                >
-                  Invoice Ref
-                </th>
+              <tr>
+                <th>Alert Type</th>
+                <th>Severity</th>
+                <th>Status</th>
+                <th>Created</th>
+                <th>Invoice Ref</th>
               </tr>
             </thead>
             <tbody>
@@ -160,66 +146,52 @@ export default async function Page() {
                 const createdAt = pickCreatedAt(alert);
                 const invoiceRef = pickInvoiceRef(alert);
 
-                // Apply different styling based on severity
-                let severityColor = "#6b7280"; // gray for default
-                if (severity.toLowerCase() === "high") severityColor = "#dc2626"; // red
-                else if (severity.toLowerCase() === "medium") severityColor = "#ea580c"; // orange
-                else if (severity.toLowerCase() === "low") severityColor = "#ca8a04"; // yellow
-
-                // Status styling
                 const isResolved =
                   status.toLowerCase() === "resolved" ||
                   status.toLowerCase() === "dismissed" ||
                   status.toLowerCase() === "acknowledged";
 
                 return (
-                  <tr key={id} style={{ borderTop: "1px solid #e5e7eb" }}>
-                    <td style={{ padding: 12, fontSize: 13, fontWeight: 600 }}>
-                      {alertType}
+                  <tr
+                    key={id}
+                    style={{ opacity: isResolved ? 0.65 : 1 }}
+                  >
+                    <td>
+                      <span style={{ fontWeight: 600 }}>{alertType}</span>
+                    </td>
+                    <td>
+                      <SeverityBadge severity={severity} />
+                    </td>
+                    <td>
+                      <StatusBadge status={status} />
                     </td>
                     <td
                       style={{
-                        padding: 12,
-                        fontSize: 13,
-                        color: severityColor,
-                        fontWeight: 600,
-                      }}
-                    >
-                      {severity}
-                    </td>
-                    <td
-                      style={{
-                        padding: 12,
-                        fontSize: 13,
-                        opacity: isResolved ? 0.6 : 1,
-                      }}
-                    >
-                      {status}
-                    </td>
-                    <td
-                      style={{
-                        padding: 12,
-                        fontSize: 13,
+                        color: "var(--text-muted)",
                         fontFamily: "monospace",
+                        fontSize: "0.8125rem",
                       }}
                     >
                       {createdAt}
                     </td>
-                    <td style={{ padding: 12, fontSize: 13 }}>
-                      {invoiceRef}
+                    <td>
+                      <span
+                        style={{
+                          fontFamily: "monospace",
+                          fontSize: "0.8125rem",
+                          color: "var(--text-secondary)",
+                        }}
+                      >
+                        {invoiceRef}
+                      </span>
                     </td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
-        </section>
+        </div>
       )}
-
-      {/*
-        Debug helper (keep commented):
-        <pre>{JSON.stringify(data ?? null, null, 2)}</pre>
-      */}
-    </main>
+    </div>
   );
 }
