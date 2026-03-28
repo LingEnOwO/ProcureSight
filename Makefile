@@ -1,4 +1,4 @@
-.PHONY: up down ps logs dbshell seed load-samples openapi types slack-test
+.PHONY: up down ps logs dbshell seed load-samples openapi types slack-test mailhog
 
 up:        ## start db + minio
 	docker compose up -d db minio
@@ -26,3 +26,6 @@ types: openapi  ## generate TS types from openapi.json
 
 slack-test:
 	./scripts/slack_test.sh
+
+mailhog:       ## run MailHog SMTP (1025) + web UI (8025)
+	docker run --rm -p 1025:1025 -p 8025:8025 mailhog/mailhog
