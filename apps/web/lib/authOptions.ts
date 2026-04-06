@@ -62,52 +62,52 @@ export const authOptions: NextAuthOptions = {
 
   callbacks: {
     async jwt({ token, user }) {
-      // On sign-in (user object exists from adapter)
+      // On sign-in the adapter populates `user`; capture the NextAuth user ID.
       if (user) {
-        token.sub = user.id;  // NextAuth user ID
-        
+        token.sub = user.id;
+      }
+
+      // Always re-fetch business user context from DB so that org_id stays
+      // current across DB reseeds or org changes (stale JWTs caused FK errors).
+      const email = user?.email ?? token.email;
+      if (email) {
         try {
-          // Query business user by email
           const result = await publicPool.query(
-            `SELECT id, org_id, role, nextauth_user_id 
-             FROM public.users 
+            `SELECT id, org_id, role, nextauth_user_id
+             FROM public.users
              WHERE email = $1`,
-            [user.email]
+            [email]
           );
-          
+
           if (result.rows.length > 0) {
             const businessUser = result.rows[0];
-            
-            // Link if not already linked
-            if (!businessUser.nextauth_user_id) {
+
+            // Link NextAuth user to business user on first sign-in
+            if (user && !businessUser.nextauth_user_id) {
               await publicPool.query(
-                `UPDATE public.users 
-                 SET nextauth_user_id = $1 
+                `UPDATE public.users
+                 SET nextauth_user_id = $1
                  WHERE id = $2`,
                 [user.id, businessUser.id]
               );
             }
-            
-            // Store business user context in JWT
+
             token.businessUserId = businessUser.id;
             token.orgId = businessUser.org_id;
             token.role = businessUser.role;
           } else {
-            // User authenticated via NextAuth but no business user exists
-            console.error(`No business user found for email: ${user.email}`);
-            // For now, allow login but mark as incomplete
+            console.error(`No business user found for email: ${email}`);
             token.businessUserId = null;
             token.orgId = null;
             token.role = null;
           }
         } catch (error) {
-          console.error('Error linking NextAuth user to business user:', error);
-          // Allow login to continue but without business context
-          token.businessUserId = null;
-          token.orgId = null;
-          token.role = null;
+          console.error('Error fetching business user context:', error);
+          // Keep existing token values on transient DB errors to avoid
+          // logging users out during temporary outages.
         }
       }
+
       return token;
     },
     

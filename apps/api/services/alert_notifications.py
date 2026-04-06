@@ -1,13 +1,11 @@
 import logging
-import asyncio
 from dataclasses import asdict, is_dataclass
-from typing import Any, Dict, Mapping, MutableMapping, Optional, Union
+from typing import Any, Dict, Mapping, Optional, Union
 
 import httpx
 
 from apps.api.services.anomaly_scoring import AlertCandidate
 from apps.api.settings import settings
-from apps.api.routes.ingest import broadcast
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +56,7 @@ def build_invoice_link(invoice_id: Optional[str]) -> Optional[str]:
     if not invoice_id:
         return None
 
-    base_url = getattr(settings, "APP_BASE_URL", None)
+    base_url = settings.APP_BASE_URL
     if not base_url:
         return None
 
@@ -101,7 +99,7 @@ async def send_alert_to_slack(alert: AlertLike, invoice_url: Optional[str] = Non
       - If SLACK_WEBHOOK_URL is not configured, this is a no-op.
       - Any network errors are logged but do not raise to callers.
     """
-    webhook_url = getattr(settings, "SLACK_WEBHOOK_URL", None)
+    webhook_url = settings.SLACK_WEBHOOK_URL
     if not webhook_url:
         logger.debug("SLACK_WEBHOOK_URL is not configured; skipping Slack notification.")
         return
@@ -151,33 +149,7 @@ def build_sse_payload(alert: AlertLike) -> Dict[str, Any]:
     return payload
 
 
-def send_alert_sse(alert: AlertLike) -> None:
-    """
-    Fire-and-forget helper to emit an 'alert_created' SSE event using the
-    shared broadcast() helper from the ingest module.
-
-    This is intentionally best-effort:
-      - If there is no running event loop, we spin up a short-lived one to
-        deliver the event.
-      - If broadcasting fails, we log the exception but do not raise it back
-        to callers. Alert creation should not be blocked by UI notification
-        failures.
-    """
-    payload = build_sse_payload(alert)
-
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        # No running event loop (likely called from a sync context).
-        try:
-            asyncio.run(broadcast(payload))
-        except Exception:
-            logger.exception("Failed to broadcast SSE 'alert_created' event.")
-        return
-
-    # We are already in an async context; schedule the broadcast as a
-    # background task and do not await it here.
-    try:
-        loop.create_task(broadcast(payload))
-    except Exception:
-        logger.exception("Failed to schedule SSE 'alert_created' event.")
+# SSE publishing has moved to the ARQ worker (apps/api/worker/tasks.py).
+# score_invoice_job publishes directly to Redis via redis.publish("sse:{org_id}", ...)
+# and the FastAPI /events endpoint delivers those messages to connected clients
+# via the redis_sse_subscriber generator in apps/api/services/sse_redis.py.

@@ -39,12 +39,23 @@ AI-assisted invoice processing and anomaly detection system designed for small-t
 │                         FastAPI API                             │
 │                                                                 │
 │  POST /ingest            ──────────────────▶  MinIO             │
-│  POST /extract/structured                   (S3-compatible)     │
+│  POST /extract/structured    (202 + job_id)  (S3-compatible)    │
 │  POST /extract/unstructured                                     │
+│  GET  /jobs/{job_id}                                            │
 │  GET  /invoices                                                 │
 │  GET  /alerts                                                   │
 │  PATCH /alerts/{id}                                             │
-│  GET  /events (SSE)                                             │
+│  GET  /events (SSE)      ◀──────────────────  Redis pub/sub     │
+└────────────────────────────┬────────────────────────────────────┘
+                             │ enqueue_job
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      Redis + ARQ Worker                         │
+│                                                                 │
+│  extract_document   — S3 fetch → LLM/parse → validate →        │
+│                       persist invoice → enqueue scoring         │
+│  score_invoice_job  — anomaly rules → insert alerts →          │
+│                       Slack webhook → Redis pub/sub SSE         │
 └────────────────────────────┬────────────────────────────────────┘
                              │
                              │ psycopg3 connection pools (sync + async)
@@ -57,19 +68,19 @@ AI-assisted invoice processing and anomaly detection system designed for small-t
 │  Schemas: public (business data), nextauth (auth tables)        │
 └────────────────────────────┬────────────────────────────────────┘
                              │
-                             │ Scoring triggers
+                             │ Scoring results
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Alerts + Notifications                       │
 │                                                                 │
 │  • Slack Webhook (instant notifications)                        │
-│  • SSE Events (real-time UI updates)                            │
+│  • SSE Events via Redis pub/sub (real-time UI updates)          │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 **Flow in Plain Language:**
 
-A user uploads an invoice (PDF, CSV, or JSON) through the web app. The ingestion API computes a SHA-256 hash for deduplication, stores the raw file in MinIO, and records metadata in Postgres. The extraction pipeline parses the invoice (using pdfplumber for PDFs or direct parsing for structured formats), validates business rules (line math, totals), and persists normalized data. Immediately after persistence, the scoring engine runs rule-based anomaly checks against vendor baselines. Any detected anomalies generate alerts that are written to the database, posted to Slack, and broadcast via SSE to connected web clients. The frontend displays invoices and alerts through a fully typed API client generated from the OpenAPI spec.
+A user uploads an invoice (PDF, CSV, or JSON) through the web app. The ingestion API computes a SHA-256 hash for deduplication, stores the raw file in MinIO, and records metadata in Postgres. The extraction endpoint enqueues an ARQ background job and returns a `job_id` immediately (HTTP 202). The ARQ worker fetches the file from S3, parses it (pdfplumber for PDFs or direct parsing for structured formats), validates business rules (line math, totals), and persists normalized invoice data. It then enqueues a second scoring job. The scoring worker runs rule-based anomaly checks against vendor baselines, writes any detected anomalies to the database, posts to Slack, and publishes SSE events via Redis pub/sub to connected web clients. The frontend polls `GET /jobs/{job_id}` for completion and displays invoices and alerts through a fully typed API client generated from the OpenAPI spec.
 
 ---
 
@@ -95,8 +106,10 @@ A user uploads an invoice (PDF, CSV, or JSON) through the web app. The ingestion
 
 **Infrastructure:**
 
-- ✅ **Docker Compose** setup for Postgres, MinIO, and MailHog
-- ✅ **Makefile** shortcuts for common tasks (`make up`, `make seed`, `make types`)
+- ✅ **Async job queue** with ARQ + Redis — extraction and scoring run in a separate worker process; HTTP endpoints return `{job_id}` immediately (HTTP 202)
+- ✅ **Redis pub/sub SSE** — real-time alert events delivered via Redis fan-out, enabling multi-process/pod SSE delivery
+- ✅ **Docker Compose** setup for Postgres, MinIO, Redis, and MailHog with automated MinIO bucket creation
+- ✅ **Makefile** shortcuts for common tasks (`make up`, `make seed`, `make worker`, `make types`)
 - ✅ **Database migrations** and seed data for local development
 
 ---
@@ -105,7 +118,6 @@ A user uploads an invoice (PDF, CSV, or JSON) through the web app. The ingestion
 
 The following items are intentionally out of scope for the current MVP:
 
-- ❌ **No background workers or async job queues** — all processing is synchronous for v0 simplicity
 - ❌ **No OCR or image-based PDF support** — only text-based PDFs are extracted
 - ❌ **No cloud deployment or IaC** — local Docker-first workflow for development
 - ❌ **No alert actions UI** — alerts can be viewed but not acknowledged/dismissed from the frontend yet
@@ -128,17 +140,17 @@ This scoped approach keeps the project focused on **core system design, data flo
 **Backend:**
 
 ```bash
-# Start infrastructure (Postgres, MinIO, MailHog)
+# Start infrastructure (Postgres, MinIO, Redis, MailHog)
 make up
 
-# Create database schema
+# Create database schema and seed data
 make seed
-
-# Apply missing RLS write policies (run once after seed)
-psql $DATABASE_URL -f scripts/add_rls_write_policies.sql
 
 # Start FastAPI server
 uvicorn apps.api.main:app --reload --port 8000
+
+# Start ARQ background worker (separate terminal)
+make worker
 ```
 
 **Frontend:**
@@ -179,8 +191,8 @@ Sign in with any email address. Check MailHog (http://localhost:8025) for the ma
 
 ## Tech Stack
 
-**Frontend:** Next.js 16 (App Router), TypeScript, Auth.js, openapi-fetch  
-**Backend:** FastAPI, Pydantic, psycopg, pdfplumber  
-**Data:** PostgreSQL 15, MinIO (S3-compatible)  
-**Dev Tools:** Docker Compose, MailHog, Makefile  
-**Integrations:** Slack webhooks, Server-Sent Events (SSE)
+**Frontend:** Next.js 16 (App Router), TypeScript, Auth.js, openapi-fetch
+**Backend:** FastAPI, Pydantic, psycopg, pdfplumber, ARQ
+**Data:** PostgreSQL 15, MinIO (S3-compatible), Redis 7
+**Dev Tools:** Docker Compose, MailHog, Makefile
+**Integrations:** Slack webhooks, Server-Sent Events (SSE via Redis pub/sub)

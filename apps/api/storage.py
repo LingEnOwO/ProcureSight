@@ -1,16 +1,7 @@
 import uuid
-from pydantic_settings import BaseSettings
-from dotenv import load_dotenv
 import boto3
 
-load_dotenv(".env.local")
-class Settings(BaseSettings):
-    S3_ENDPOINT: str
-    S3_ACCESS_KEY: str
-    S3_SECRET_KEY: str
-    S3_BUCKET: str
-
-settings = Settings()
+from apps.api.settings import settings
 
 s3 = boto3.client(
     "s3",

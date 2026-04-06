@@ -57,7 +57,8 @@ export default function Page() {
         return;
       }
 
-      await ingestRes.json();
+      const ingestData = await ingestRes.json();
+      const rawDocId = ingestData.raw_doc_id;
       setStatus("uploaded");
       setStatusMessage("File uploaded successfully");
 
@@ -65,20 +66,16 @@ export default function Page() {
       const fileExt = file.name.split(".").pop()?.toLowerCase();
       const isPdf = fileExt === "pdf";
       const extractEndpoint = isPdf
-        ? "/api/extract/unstructured"
-        : "/api/extract/structured";
+        ? `/api/extract/unstructured?raw_doc_id=${rawDocId}`
+        : `/api/extract/structured?raw_doc_id=${rawDocId}`;
 
       setStatus("extracting");
       setStatusMessage(
         isPdf ? "Extracting from PDF..." : "Extracting structured data..."
       );
 
-      const extractFormData = new FormData();
-      extractFormData.append("file", file);
-
       const extractRes = await fetch(extractEndpoint, {
         method: "POST",
-        body: extractFormData,
       });
 
       if (!extractRes.ok) {
@@ -95,7 +92,7 @@ export default function Page() {
       const extractData = await extractRes.json();
 
       setStatus("complete");
-      setStatusMessage("Processing complete");
+      setStatusMessage("Extraction job queued");
       setResultData(extractData);
     } catch (err: any) {
       setStatus("error");
@@ -116,7 +113,6 @@ export default function Page() {
     if (status === "error") return "error";
     if (stepKey === "uploading" && (status === "uploading" || status === "uploaded" || status === "extracting")) return "done";
     if (stepKey === "extracting" && status === "extracting") return "active";
-    if (stepKey === "complete" && status === "complete") return "active";
     return "pending";
   }
 
@@ -243,9 +239,8 @@ export default function Page() {
               {steps.map((step, idx) => {
                 const state = getStepState(step.key);
                 return (
-                  <>
+                  <div key={step.key} style={{ display: "contents" }}>
                     <div
-                      key={step.key}
                       className={`status-step${state === "active" ? " active" : state === "done" ? " done" : ""}`}
                     >
                       {state === "done" ? (
@@ -261,9 +256,9 @@ export default function Page() {
                       {step.label}
                     </div>
                     {idx < steps.length - 1 && (
-                      <div key={`divider-${idx}`} className="status-divider" />
+                      <div className="status-divider" />
                     )}
-                  </>
+                  </div>
                 );
               })}
             </div>
@@ -279,8 +274,8 @@ export default function Page() {
         <div className="alert-banner success">
           <div className="alert-title">Processing complete</div>
           <div style={{ fontSize: "0.8125rem", marginBottom: resultData ? "0.75rem" : 0 }}>
-            <strong>{file?.name}</strong> has been uploaded and processed
-            successfully.
+            <strong>{file?.name}</strong> has been uploaded. Extraction is
+            running in the background — check the Invoices page shortly.
           </div>
           {resultData && (
             <details style={{ marginTop: "0.5rem" }}>
