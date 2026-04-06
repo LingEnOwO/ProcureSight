@@ -7,7 +7,7 @@ import { authOptions } from '@/lib/authOptions';
  */
 export async function POST(request: NextRequest) {
   const session = await getServerSession(authOptions);
-  
+
   if (!session) {
     return NextResponse.json({ detail: 'Authentication required' }, { status: 401 });
   }
@@ -21,20 +21,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ detail: 'Session missing user context' }, { status: 401 });
   }
 
+  const rawDocId = request.nextUrl.searchParams.get('raw_doc_id');
+  if (!rawDocId) {
+    return NextResponse.json({ detail: 'raw_doc_id is required' }, { status: 400 });
+  }
+
   try {
-    const formData = await request.formData();
     const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-    
-    const response = await fetch(`${backendUrl}/extract/structured`, {
+
+    const response = await fetch(`${backendUrl}/extract/structured?raw_doc_id=${rawDocId}`, {
       method: 'POST',
       headers: {
         'X-Business-User-Id': businessUserId,
         'X-Org-Id': orgId,
         'X-User-Role': role || 'user',
       },
-      body: formData,
     });
-    
+
     let data: any;
     const contentType = response.headers.get('content-type') || '';
     if (contentType.includes('application/json')) {
@@ -44,7 +47,7 @@ export async function POST(request: NextRequest) {
       data = { detail: text || 'Unknown error from backend' };
     }
     return NextResponse.json(data, { status: response.status });
-    
+
   } catch (error: any) {
     console.error('Extract structured proxy error:', error);
     return NextResponse.json(

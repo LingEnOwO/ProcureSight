@@ -37,6 +37,19 @@ def insert_raw_doc(*, org_id, s3_key, filename, mime, byte_len, sha256, uploaded
         conn.commit()
         return raw_doc_id
     
+def get_raw_doc_by_id(raw_doc_id: int, *, org_id: str) -> dict | None:
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(sql.SQL("SET LOCAL app.org_id = {}").format(sql.Literal(org_id)))
+        cur.execute(
+            "SELECT id, s3_key, filename, mime FROM raw_docs WHERE id = %s",
+            (raw_doc_id,),
+        )
+        row = cur.fetchone()
+        if row:
+            return {"id": row[0], "s3_key": row[1], "filename": row[2], "mime": row[3]}
+        return None
+
+
 def db_ok() -> bool:
     try:
         with pool.connection() as conn, conn.cursor() as cur:

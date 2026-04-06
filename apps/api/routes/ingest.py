@@ -1,103 +1,78 @@
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
-import asyncio, json, mimetypes, hashlib
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request
+import mimetypes, hashlib
 from starlette.responses import StreamingResponse
 from ..storage import put_object, s3_ok
 from ..db import insert_raw_doc, get_raw_doc_by_hash, db_ok
-from ..settings import settings
+from ..services.sse_redis import redis_sse_subscriber, redis_publish
 from ..auth import get_user_context, UserContext
 
 router = APIRouter(tags=["ingestion"])
 
-SUBSCRIBERS: set[asyncio.Queue] = set()
-
-async def broadcast(event: dict):
-    # Push event to all connected clients
-    msg = json.dumps(event)
-    dead = []
-    for q in list(SUBSCRIBERS):
-        try:
-            q.put_nowait(msg)
-        except Exception:
-            dead.append(q)
-    for q in dead:
-        SUBSCRIBERS.discard(q)
 
 @router.get("/events")
-async def sse_events():
+async def sse_events(
+    request: Request,
+    user_ctx: UserContext = Depends(get_user_context),
+):
     """
     Server-Sent Events stream.
     - Sends JSON events as `data: {...}\n\n`
     - Emits a keepalive comment every 15s so proxies don't time out.
+    - Events are delivered via Redis pub/sub so ARQ workers can broadcast
+      to all connected FastAPI processes.
     """
-    queue: asyncio.Queue[str] = asyncio.Queue()
-    SUBSCRIBERS.add(queue)
+    org_id = user_ctx.org_id
+    redis_client = request.app.state.redis
 
     async def event_generator():
-        try:
-            # initial hello so clients know they're connected
-            yield "event: hello\ndata: {}\n\n"
-            while True:
-                try:
-                    # wait up to 15s for a real event
-                    msg = await asyncio.wait_for(queue.get(), timeout=15)
-                    yield f"data: {msg}\n\n"
-                except asyncio.TimeoutError:
-                    # keepalive (comment line per SSE spec)
-                    yield ": ping\n\n"
-        except asyncio.CancelledError:
-            # client disconnected
-            pass
-        finally:
-            SUBSCRIBERS.discard(queue)
-    return StreamingResponse(event_generator(),
-                             media_type = "text/event-stream",
-                             headers={
-                                 "Cache-Control": "no-cache",
-                                 "Connection": "keep-alive",
-                             })
-            
-# Ingestion
+        yield "event: hello\ndata: {}\n\n"
+        async for msg in redis_sse_subscriber(redis_client, org_id):
+            if msg == "__keepalive__":
+                yield ": ping\n\n"
+            else:
+                yield f"data: {msg}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
+
+
 @router.post("/ingest")
 async def ingest(
+    request: Request,
     file: UploadFile = File(...),
-    user_ctx: UserContext = Depends(get_user_context)
+    user_ctx: UserContext = Depends(get_user_context),
 ):
     """
     Ingest file upload. User context from trusted Next.js gateway headers.
     """
     org = user_ctx.org_id
 
-    # Read bytes
     try:
         data = await file.read()
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to read upload: {e}")
-    
-    # Compute content hash for idempotency
+
     digest = hashlib.sha256(data).hexdigest()
 
-    # Fast duplicate check (per org, by content hash) BEFORE touching S3
     existing = get_raw_doc_by_hash(org_id=org, sha256=digest)
     if existing:
-        # Do not upload again and do not insert another DB row.
-        # Optionally skip broadcast for duplicates to avoid noisy toasts.
         return {
             "raw_doc_id": existing["id"],
             "s3_key": existing["s3_key"],
             "duplicate": True,
         }
-    
-    # Determine content type
+
     content_type = file.content_type or mimetypes.guess_type(file.filename)[0] or "application/octet-stream"
 
-    # Store bytes -> MinIO
     try:
         s3_key = put_object(org, file.filename, content_type, data)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"S3 upload failed: {e}")
-    
-    # Register metadata -> Postgres
-    try: 
+
+    try:
         raw_doc_id = insert_raw_doc(
             org_id=org,
             s3_key=s3_key,
@@ -105,17 +80,19 @@ async def ingest(
             mime=content_type,
             byte_len=len(data),
             sha256=digest,
-            uploaded_by=user_ctx.business_user_id,  # Use authenticated user ID
+            uploaded_by=user_ctx.business_user_id,
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"DB insert failed: {e}")
 
-    await broadcast({
+    await redis_publish(request.app.state.redis, org, {
         "type": "upload_received",
         "raw_doc_id": raw_doc_id,
         "s3_key": s3_key,
     })
+
     return {"raw_doc_id": raw_doc_id, "s3_key": s3_key, "duplicate": False}
+
 
 @router.get("/health")
 def health():

@@ -1,7 +1,10 @@
 .PHONY: up down ps logs dbshell seed load-samples openapi types slack-test mailhog
 
-up:        ## start db + minio
-	docker compose up -d db minio
+up:        ## start db + minio + redis + mailhog and init minio bucket
+	docker compose up -d db minio redis mailhog minio-init
+
+worker:    ## run ARQ worker (requires Redis at localhost:6379)
+	arq apps.api.worker.settings.WorkerSettings
 
 down:      ## stop all
 	docker compose down -v
@@ -26,6 +29,3 @@ types: openapi  ## generate TS types from openapi.json
 
 slack-test:
 	./scripts/slack_test.sh
-
-mailhog:       ## run MailHog SMTP (1025) + web UI (8025)
-	docker run --rm -p 1025:1025 -p 8025:8025 mailhog/mailhog
