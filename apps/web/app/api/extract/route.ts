@@ -77,3 +77,6 @@ export async function POST(request: NextRequest) {
   return handleExtract(request, endpoint);
 }
  */
+
+export {};
+
