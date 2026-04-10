@@ -36,8 +36,36 @@ export const authOptions: NextAuthOptions = {
 
   providers: [
     EmailProvider({
-      server: process.env.EMAIL_SERVER,
       from: process.env.EMAIL_FROM,
+      async sendVerificationRequest({ identifier: email, url }) {
+        const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.SENDGRID_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            personalizations: [{ to: [{ email }] }],
+            from: { email: process.env.EMAIL_FROM },
+            subject: "Sign in to ProcureSight",
+            content: [
+              {
+                type: "text/plain",
+                value: `Sign in to ProcureSight by clicking this link:\n\n${url}\n\nIf you did not request this, you can ignore this email.`,
+              },
+              {
+                type: "text/html",
+                value: `<p>Sign in to ProcureSight by clicking the link below:</p><p><a href="${url}">Sign in</a></p><p>If you did not request this, you can ignore this email.</p>`,
+              },
+            ],
+          }),
+        });
+
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(`SendGrid error ${response.status}: ${text}`);
+        }
+      },
     }),
   ],
 
