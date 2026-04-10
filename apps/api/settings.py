@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     S3_BUCKET: str
     REDIS_HOST: str = "localhost"
     REDIS_PORT: int = 6379
+    REDIS_PASSWORD: str = ""
     SLACK_WEBHOOK_URL: str = ""
     APP_BASE_URL: str = ""
 
@@ -26,6 +27,10 @@ class Settings(BaseSettings):
     @property
     def redis_settings(self):
         from arq.connections import RedisSettings
-        return RedisSettings(host=self.REDIS_HOST, port=self.REDIS_PORT)
+        return RedisSettings(
+            host=self.REDIS_HOST,
+            port=self.REDIS_PORT,
+            password=self.REDIS_PASSWORD or None,
+        )
 
 settings = Settings()
