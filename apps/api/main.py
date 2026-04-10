@@ -17,8 +17,9 @@ from fastapi.middleware.cors import CORSMiddleware
 async def lifespan(app: FastAPI):
     await async_pool.open()
     app.state.arq_pool = await arq.create_pool(settings.redis_settings)
+    _redis_password = f":{settings.REDIS_PASSWORD}@" if settings.REDIS_PASSWORD else ""
     app.state.redis = aioredis.from_url(
-        f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}",
+        f"redis://{_redis_password}{settings.REDIS_HOST}:{settings.REDIS_PORT}",
         decode_responses=True,
     )
     yield
