@@ -1,0 +1,1 @@
+Run `git diff HEAD` (or `git diff --cached` if there are staged changes) to see what changed. Then output a single concise git commit message in conventional commits format (e.g. `feat:`, `fix:`, `ci:`, `docs:`, `refactor:`). Output only the commit message — no explanation, no markdown, no quotes.

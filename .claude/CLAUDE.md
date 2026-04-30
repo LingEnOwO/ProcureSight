@@ -98,4 +98,5 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on every push:
 1. `test-api` — pytest with live Postgres + Redis services
 2. `test-web` — Vitest
 3. `build-web` — Next.js build
-4. `deploy` — Railway deploy (main branch only)
+
+Railway handles deployment automatically via its native GitHub integration — no CI deploy step needed.
