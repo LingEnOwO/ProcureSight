@@ -1,0 +1,68 @@
+{
+  "invoice_no": "INV-2024-V00-0003",
+  "vendor": "Apex Office Supply",
+  "invoice_date": "2024-12-13",
+  "due_date": "2025-01-12",
+  "currency": "USD",
+  "subtotal": 798.99,
+  "tax": 63.92,
+  "total": 862.91,
+  "lines": [
+    {
+      "sku": null,
+      "desc": "Sticky Notes Variety Pack",
+      "qty": 3.0,
+      "unit_price": 13.35,
+      "line_total": 40.05
+    },
+    {
+      "sku": null,
+      "desc": "Dry-Erase Markers Set",
+      "qty": 1.0,
+      "unit_price": 13.92,
+      "line_total": 13.92
+    },
+    {
+      "sku": "AOS-PEN",
+      "desc": "Ballpoint Pens (Box of 12)",
+      "qty": 4.0,
+      "unit_price": 8.58,
+      "line_total": 34.32
+    },
+    {
+      "sku": "AOS-COF",
+      "desc": "Premium Ground Coffee (5 lb bag)",
+      "qty": 4.0,
+      "unit_price": 35.34,
+      "line_total": 141.36
+    },
+    {
+      "sku": "AOS-CBN",
+      "desc": "3-Ring Binders (Case of 12)",
+      "qty": 1.0,
+      "unit_price": 58.4,
+      "line_total": 58.4
+    },
+    {
+      "sku": "AOS-TNR",
+      "desc": "Black Laser Toner Cartridge",
+      "qty": 2.0,
+      "unit_price": 79.79,
+      "line_total": 159.58
+    },
+    {
+      "sku": "AOS-FLD",
+      "desc": "Hanging File Folders (25-pack)",
+      "qty": 2.0,
+      "unit_price": 21.19,
+      "line_total": 42.38
+    },
+    {
+      "sku": "AOS-PPR",
+      "desc": "Copy Paper (Case, 10 Reams)",
+      "qty": 7.0,
+      "unit_price": 44.14,
+      "line_total": 308.98
+    }
+  ]
+}
