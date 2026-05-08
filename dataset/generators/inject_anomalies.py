@@ -171,7 +171,7 @@ def inject_duplicate_invoice_no(inv: dict, existing_nos: set, rng: random.Random
     result["invoice_date"] = (orig_date + timedelta(days=rng.randint(1, 5))).isoformat()
     return result, {
         "anomaly_type": "duplicate_invoice_no",
-        "severity": "high",
+        "severity": "medium",
         "explanation": (
             f"Invoice number {result['invoice_no']} already exists in the system. "
             f"This duplicate was submitted {abs((date.fromisoformat(result['invoice_date']) - orig_date).days)} "
@@ -185,7 +185,7 @@ def inject_duplicate_submission(inv: dict, rng: random.Random) -> dict:
     # Identical content but different submission date — same invoice_no
     return result, {
         "anomaly_type": "duplicate_submission",
-        "severity": "high",
+        "severity": "critical",
         "explanation": (
             f"Invoice {inv['invoice_no']} from {inv['vendor']} appears to be an exact "
             f"duplicate submission. Total: {inv['currency']} {inv['total']:.2f}. "
