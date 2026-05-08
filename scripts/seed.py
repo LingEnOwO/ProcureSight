@@ -127,6 +127,20 @@ FROM invoices
 GROUP BY org_id, vendor_id;
 
 
+-- === Contracts & policies ===
+CREATE TABLE IF NOT EXISTS vendor_contracts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  vendor_id UUID NOT NULL REFERENCES vendors(id) ON DELETE CASCADE,
+  spending_limit NUMERIC(18,2),        -- NULL = no limit enforced
+  approved_categories TEXT[],          -- NULL = all categories allowed; matched against line desc/sku
+  payment_terms_days INTEGER,          -- NULL = not enforced; max days between invoice_date and due_date
+  effective_date DATE,
+  expiry_date DATE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (org_id, vendor_id)
+);
+
 -- === Alerts & auditing ===
 -- Alerts (anomalies, warnings)
 CREATE TABLE IF NOT EXISTS alerts (
@@ -167,14 +181,15 @@ CREATE TABLE IF NOT EXISTS audit_log (
 
 -- === Row Level Security (RLS) scaffolding ===
 -- Enable RLS on org-scoped tables
-ALTER TABLE users         ENABLE ROW LEVEL SECURITY;
-ALTER TABLE vendors       ENABLE ROW LEVEL SECURITY;
-ALTER TABLE raw_docs      ENABLE ROW LEVEL SECURITY;
-ALTER TABLE extractions   ENABLE ROW LEVEL SECURITY;
-ALTER TABLE invoices      ENABLE ROW LEVEL SECURITY;
-ALTER TABLE invoice_lines ENABLE ROW LEVEL SECURITY;
-ALTER TABLE alerts        ENABLE ROW LEVEL SECURITY;
-ALTER TABLE audit_log     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE users             ENABLE ROW LEVEL SECURITY;
+ALTER TABLE vendors           ENABLE ROW LEVEL SECURITY;
+ALTER TABLE raw_docs          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE extractions       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE invoices          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE invoice_lines     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE vendor_contracts  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE alerts            ENABLE ROW LEVEL SECURITY;
+ALTER TABLE audit_log         ENABLE ROW LEVEL SECURITY;
 
 -- Basic org containment policies (use app.org_id GUC; safe no-op if not set)
 DO $body$
@@ -195,6 +210,16 @@ BEGIN
   ) THEN
     EXECUTE 'CREATE POLICY org_select_vendors ON vendors FOR SELECT USING (org_id = current_setting(''app.org_id'', true)::uuid)';
     EXECUTE 'CREATE POLICY org_insert_vendors ON vendors FOR INSERT WITH CHECK (org_id = current_setting(''app.org_id'', true)::uuid)';
+  END IF;
+
+  -- Vendor contracts
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'vendor_contracts' AND policyname = 'org_select_vendor_contracts'
+  ) THEN
+    EXECUTE 'CREATE POLICY org_select_vendor_contracts ON vendor_contracts FOR SELECT USING (org_id = current_setting(''app.org_id'', true)::uuid)';
+    EXECUTE 'CREATE POLICY org_insert_vendor_contracts ON vendor_contracts FOR INSERT WITH CHECK (org_id = current_setting(''app.org_id'', true)::uuid)';
+    EXECUTE 'CREATE POLICY org_update_vendor_contracts ON vendor_contracts FOR UPDATE USING (org_id = current_setting(''app.org_id'', true)::uuid) WITH CHECK (org_id = current_setting(''app.org_id'', true)::uuid)';
   END IF;
 
   -- Raw docs
@@ -264,6 +289,7 @@ END $$;
 GRANT USAGE ON SCHEMA public TO app_user;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_user;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_user;
+GRANT SELECT, INSERT, UPDATE, DELETE ON vendor_contracts TO app_user;
 """
 with psycopg.connect(DATABASE_URL) as conn:
     with conn.cursor() as cur:
