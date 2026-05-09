@@ -140,9 +140,11 @@ SELECT
   -- Last 30 days
   COUNT(*) FILTER (WHERE invoice_date >= current_date - INTERVAL '30 days') AS invoice_count_30d,
   COALESCE(SUM(total) FILTER (WHERE invoice_date >= current_date - INTERVAL '30 days'), 0) AS total_spend_30d,
+  percentile_cont(0.5) WITHIN GROUP (ORDER BY total) FILTER (WHERE invoice_date >= current_date - INTERVAL '30 days') AS median_invoice_total_30d,
   -- Last 90 days
   COUNT(*) FILTER (WHERE invoice_date >= current_date - INTERVAL '90 days') AS invoice_count_90d,
-  COALESCE(SUM(total) FILTER (WHERE invoice_date >= current_date - INTERVAL '90 days'), 0) AS total_spend_90d
+  COALESCE(SUM(total) FILTER (WHERE invoice_date >= current_date - INTERVAL '90 days'), 0) AS total_spend_90d,
+  percentile_cont(0.5) WITHIN GROUP (ORDER BY total) FILTER (WHERE invoice_date >= current_date - INTERVAL '90 days') AS median_invoice_total_90d
 FROM invoices
 GROUP BY org_id, vendor_id;
 

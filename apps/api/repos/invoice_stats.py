@@ -162,7 +162,8 @@ async def get_vendor_spend_stats(
     List[Dict[str, Any]]
         Zero or more rows from `vendor_spend_stats`, each with keys:
         `org_id`, `vendor_id`, `invoice_count_30d`, `total_spend_30d`,
-        `invoice_count_90d`, and `total_spend_90d`.
+        `median_invoice_total_30d`, `invoice_count_90d`, `total_spend_90d`,
+        and `median_invoice_total_90d`.
     """
     conditions = ["org_id = %(org_id)s"]
     values: Dict[str, Any] = {"org_id": org_id}
@@ -179,8 +180,10 @@ async def get_vendor_spend_stats(
           vendor_id,
           invoice_count_30d,
           total_spend_30d,
+          median_invoice_total_30d,
           invoice_count_90d,
-          total_spend_90d
+          total_spend_90d,
+          median_invoice_total_90d
         FROM vendor_spend_stats
         WHERE {where_clause}
         ORDER BY total_spend_90d DESC;

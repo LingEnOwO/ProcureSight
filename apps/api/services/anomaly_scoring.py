@@ -33,7 +33,7 @@ MEDIUM_PRICE_RATIO_THRESHOLD = 2.0  # 2x–3x    → "medium"
 HIGH_PRICE_RATIO_THRESHOLD = 3.0    # 3x+       → "high"
 
 # ── Vendor volume spike thresholds ───────────────────────────────────────────
-MIN_INVOICES_FOR_SPEND_BASELINE = 3
+MIN_INVOICES_FOR_SPEND_BASELINE = 5
 MEDIUM_TOTAL_RATIO_THRESHOLD = 2.0  # 2x–3x    → "medium"
 HIGH_TOTAL_RATIO_THRESHOLD = 3.0    # 3x+       → "high"
 
@@ -176,9 +176,8 @@ async def _find_potential_duplicate_invoices(
     vendor_id: str,
     invoice_id: str,
     invoice_no: Optional[str],
-    invoice_total: Optional[float],
 ) -> List[Dict[str, Any]]:
-    if invoice_no is None and invoice_total is None:
+    if invoice_no is None:
         return []
 
     base_conditions = [
@@ -192,16 +191,12 @@ async def _find_potential_duplicate_invoices(
         "invoice_id": invoice_id,
     }
 
-    match_clauses: List[str] = []
-    if invoice_no is not None:
-        match_clauses.append("invoice_no = %(invoice_no)s")
-        values["invoice_no"] = invoice_no
-    if invoice_total is not None:
-        match_clauses.append("total = %(invoice_total)s")
-        values["invoice_total"] = invoice_total
+    if invoice_no is None:
+        return []
 
+    values["invoice_no"] = invoice_no
     where_clause = " AND ".join(base_conditions)
-    where_clause += " AND (" + " OR ".join(match_clauses) + ")"
+    where_clause += " AND invoice_no = %(invoice_no)s"
 
     query = f"""
         SELECT
@@ -253,24 +248,24 @@ async def _score_vendor_volume_spikes_for_invoice(
         return []
 
     count_90d = baseline["invoice_count_90d"] or 0
-    spend_90d = baseline["total_spend_90d"] or 0.0
     count_30d = baseline["invoice_count_30d"] or 0
-    spend_30d = baseline["total_spend_30d"] or 0.0
+    median_90d = baseline["median_invoice_total_90d"]
+    median_30d = baseline["median_invoice_total_30d"]
 
     baseline_window = None
-    baseline_avg_total: Optional[float] = None
+    baseline_median_total: Optional[float] = None
 
-    if count_90d >= MIN_INVOICES_FOR_SPEND_BASELINE and spend_90d > 0:
+    if count_90d >= MIN_INVOICES_FOR_SPEND_BASELINE and median_90d:
         baseline_window = "90d"
-        baseline_avg_total = float(spend_90d) / float(count_90d)
-    elif count_30d >= MIN_INVOICES_FOR_SPEND_BASELINE and spend_30d > 0:
+        baseline_median_total = float(median_90d)
+    elif count_30d >= MIN_INVOICES_FOR_SPEND_BASELINE and median_30d:
         baseline_window = "30d"
-        baseline_avg_total = float(spend_30d) / float(count_30d)
+        baseline_median_total = float(median_30d)
 
-    if baseline_avg_total is None or baseline_avg_total <= 0:
+    if baseline_median_total is None or baseline_median_total <= 0:
         return []
 
-    ratio = float(invoice_total) / float(baseline_avg_total)
+    ratio = float(invoice_total) / float(baseline_median_total)
 
     severity: Optional[str] = None
     if ratio >= HIGH_TOTAL_RATIO_THRESHOLD:
@@ -284,14 +279,14 @@ async def _score_vendor_volume_spikes_for_invoice(
     message = (
         f"Invoice total {invoice_total:.2f} on invoice "
         f"{invoice_no or invoice_id} is {ratio:.2f}x the vendor's "
-        f"average invoice total over the last {baseline_window}."
+        f"median invoice total over the last {baseline_window}."
     )
 
     meta: Dict[str, Any] = {
         "rule": "vendor_volume_spike",
         "ratio": ratio,
         "baseline_window": baseline_window,
-        "baseline_avg_total": baseline_avg_total,
+        "baseline_median_total": baseline_median_total,
         "invoice_total": float(invoice_total),
         "invoice_no": invoice_no,
         "invoice_id": str(invoice_id),
@@ -299,10 +294,6 @@ async def _score_vendor_volume_spikes_for_invoice(
         "counts": {
             "invoice_count_30d": count_30d,
             "invoice_count_90d": count_90d,
-        },
-        "spend": {
-            "total_spend_30d": float(spend_30d),
-            "total_spend_90d": float(spend_90d),
         },
     }
 
@@ -347,7 +338,6 @@ async def _score_duplicate_invoices_for_invoice(
         vendor_id=vendor_id,
         invoice_id=invoice_id,
         invoice_no=invoice_no,
-        invoice_total=invoice_total,
     )
     if not duplicates:
         return []
@@ -372,7 +362,7 @@ async def _score_duplicate_invoices_for_invoice(
                 "invoice_id": str(dup_id),
                 "invoice_no": dup_invoice_no,
                 "total": float(dup_total) if dup_total is not None else None,
-                "invoice_date": dup_date,
+                "invoice_date": str(dup_date) if dup_date is not None else None,
                 "match_on": {
                     "invoice_no": match_on_invoice_no,
                     "total": match_on_total,
