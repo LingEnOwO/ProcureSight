@@ -57,9 +57,14 @@ ANOMALY_WEIGHTS = {
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _load_invoices(directory: Path) -> dict[str, dict]:
-    """Return {invoice_no: invoice_dict} from JSON files."""
+    """Return {invoice_no: invoice_dict} from clean INV-*.json files only.
+
+    ANOM-* files are excluded so re-running injection never picks up a
+    previously-injected anomaly as a base invoice (which would stack prefixes
+    and produce double-prefixed filenames like ANOM-0003-ANOM-0065-INV-...).
+    """
     invoices: dict[str, dict] = {}
-    for fp in sorted(directory.glob("*.json")):
+    for fp in sorted(directory.glob("INV-*.json")):
         try:
             inv = json.loads(fp.read_text(encoding="utf-8"))
             invoices[inv["invoice_no"]] = inv

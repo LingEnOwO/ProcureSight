@@ -1,0 +1,180 @@
+"""
+Bulk-upload clean invoice JSON files to ProcureSight.
+
+For each INV-*.json file:
+  1. POST /ingest        — upload to MinIO, create raw_docs row
+  2. POST /extract/structured — enqueue ARQ worker job to parse JSON into
+                                invoices / invoice_lines / vendors tables
+
+Org and user IDs are resolved from the database at startup.
+
+Usage:
+    source venv/bin/activate
+    python scripts/upload_clean_invoices.py [--dir dataset/generated/invoices_json] \
+                                            [--concurrency 20] \
+                                            [--api-url http://localhost:8000]
+"""
+
+import argparse
+import asyncio
+import os
+import pathlib
+import sys
+
+import aiohttp
+import psycopg
+from dotenv import load_dotenv
+
+load_dotenv(".env.local")
+
+DB_URL = os.getenv("DATABASE_URL", "postgresql://procure:procure@localhost:5432/procuresight")
+DEFAULT_DIR = pathlib.Path("dataset/generated/invoices_json")
+DEFAULT_API = "http://localhost:8000"
+DEFAULT_CONCURRENCY = 20
+
+
+def resolve_demo_ids() -> tuple[str, str]:
+    with psycopg.connect(DB_URL) as conn, conn.cursor() as cur:
+        cur.execute("SELECT id FROM orgs WHERE name = 'Demo Org'")
+        row = cur.fetchone()
+        if not row:
+            sys.exit("[error] Demo Org not found — run `make seed` first")
+        org_id = str(row[0])
+
+        cur.execute("SELECT id FROM users WHERE email = 'uploader@demo.local'")
+        row = cur.fetchone()
+        if not row:
+            sys.exit("[error] uploader@demo.local not found — run `make seed` first")
+        user_id = str(row[0])
+
+    return org_id, user_id
+
+
+async def upload_file(
+    session: aiohttp.ClientSession,
+    path: pathlib.Path,
+    api_url: str,
+    org_id: str,
+    user_id: str,
+    semaphore: asyncio.Semaphore,
+    counters: dict,
+) -> None:
+    async with semaphore:
+        headers = {
+            "X-Org-Id": org_id,
+            "X-Business-User-Id": user_id,
+            "X-User-Role": "admin",
+        }
+        timeout = aiohttp.ClientTimeout(total=30)
+        try:
+            # Step 1: ingest — upload file to MinIO + create raw_docs row
+            data = aiohttp.FormData()
+            data.add_field(
+                "file",
+                open(path, "rb"),
+                filename=path.name,
+                content_type="application/json",
+            )
+            async with session.post(
+                f"{api_url}/ingest", data=data, headers=headers, timeout=timeout
+            ) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    counters["error"] += 1
+                    print(f"\n[ingest error] {path.name}: HTTP {resp.status} — {text[:120]}")
+                    return
+                body = await resp.json()
+
+            raw_doc_id = body.get("raw_doc_id")
+            duplicate = body.get("duplicate", False)
+
+            # Step 2: enqueue structured extraction (parses JSON → invoices/lines/vendors)
+            async with session.post(
+                f"{api_url}/extract/structured",
+                params={"raw_doc_id": raw_doc_id},
+                headers=headers,
+                timeout=timeout,
+            ) as resp:
+                if resp.status != 202:
+                    text = await resp.text()
+                    counters["error"] += 1
+                    print(f"\n[extract error] {path.name}: HTTP {resp.status} — {text[:120]}")
+                    return
+
+            if duplicate:
+                counters["duplicate"] += 1
+            else:
+                counters["ok"] += 1
+
+        except Exception as exc:
+            counters["error"] += 1
+            print(f"\n[error] {path.name}: {exc}")
+        finally:
+            counters["done"] += 1
+            done = counters["done"]
+            total = counters["total"]
+            if done % 100 == 0 or done == total:
+                pct = done / total * 100
+                print(
+                    f"  {done}/{total} ({pct:.0f}%)  "
+                    f"ok={counters['ok']}  dup={counters['duplicate']}  err={counters['error']}",
+                    end="\r",
+                    flush=True,
+                )
+
+
+async def main(invoice_dir: pathlib.Path, api_url: str, concurrency: int) -> None:
+    files = sorted(invoice_dir.glob("INV-*.json"))
+    if not files:
+        sys.exit(f"[error] No INV-*.json files found in {invoice_dir}")
+
+    print(f"Found {len(files)} clean invoice files in {invoice_dir}")
+
+    org_id, user_id = resolve_demo_ids()
+    print(f"Org ID   : {org_id}")
+    print(f"User ID  : {user_id}")
+    print(f"Endpoints: {api_url}/ingest  →  {api_url}/extract/structured")
+    print(f"Workers  : {concurrency}")
+    print()
+
+    counters = {"ok": 0, "duplicate": 0, "error": 0, "done": 0, "total": len(files)}
+    semaphore = asyncio.Semaphore(concurrency)
+
+    connector = aiohttp.TCPConnector(limit=concurrency)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        tasks = [
+            upload_file(session, f, api_url, org_id, user_id, semaphore, counters)
+            for f in files
+        ]
+        await asyncio.gather(*tasks)
+
+    print()
+    print(
+        f"\nDone. ingested+enqueued={counters['ok']}  duplicates={counters['duplicate']}  errors={counters['error']}"
+    )
+    if counters["ok"] > 0:
+        print("ARQ worker is now processing extraction jobs in the background.")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Bulk-upload clean invoice JSONs to ProcureSight")
+    parser.add_argument(
+        "--dir",
+        type=pathlib.Path,
+        default=DEFAULT_DIR,
+        help=f"Directory containing INV-*.json files (default: {DEFAULT_DIR})",
+    )
+    parser.add_argument(
+        "--api-url",
+        default=DEFAULT_API,
+        help=f"FastAPI base URL (default: {DEFAULT_API})",
+    )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=DEFAULT_CONCURRENCY,
+        help=f"Max parallel uploads (default: {DEFAULT_CONCURRENCY})",
+    )
+    args = parser.parse_args()
+
+    asyncio.run(main(args.dir, args.api_url, args.concurrency))
