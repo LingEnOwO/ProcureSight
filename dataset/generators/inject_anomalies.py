@@ -53,6 +53,20 @@ ANOMALY_WEIGHTS = {
     "excessive_consulting":    6,
 }
 
+# Anomaly types covered by the 4 current scoring rules vs requiring future RAG
+DETECTABILITY = {
+    "price_spike":           "current_rules",   # unit_price_delta rule
+    "quantity_spike":        "current_rules",   # vendor_volume_spike rule
+    "duplicate_invoice_no":  "current_rules",   # duplicate_invoice rule
+    "duplicate_submission":  "current_rules",   # duplicate_invoice rule
+    "excessive_consulting":  "current_rules",   # contract_policy_violation rule
+    "tax_mismatch":          "future_rag",
+    "vendor_name_variation": "future_rag",
+    "out_of_cadence":        "future_rag",
+    "negative_line_item":    "future_rag",
+    "unusual_currency":      "future_rag",
+}
+
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -358,10 +372,11 @@ def inject(
         injected_nos.add(modified["invoice_no"])
 
         anomalies.append({
-            "invoice_no":   modified["invoice_no"],
-            "anomaly_type": meta["anomaly_type"],
-            "severity":     meta["severity"],
-            "explanation":  meta["explanation"],
+            "invoice_no":    modified["invoice_no"],
+            "anomaly_type":  meta["anomaly_type"],
+            "severity":      meta["severity"],
+            "detectability": DETECTABILITY.get(meta["anomaly_type"], "future_rag"),
+            "explanation":   meta["explanation"],
         })
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
