@@ -60,8 +60,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS raw_docs_org_sha256_uidx
 CREATE TABLE IF NOT EXISTS extractions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   raw_doc_id BIGINT NOT NULL REFERENCES raw_docs(id) ON DELETE CASCADE,
+  invoice_id UUID,
   status TEXT NOT NULL,
   confidence NUMERIC(5,2),
+  needs_review BOOLEAN NOT NULL DEFAULT false,
   payload_json JSONB NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -84,6 +86,24 @@ CREATE TABLE IF NOT EXISTS invoices (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (org_id, vendor_id, invoice_no)
 );
+
+-- FK from extractions → invoices (defined here because extractions is created before invoices)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'extractions_invoice_id_fkey'
+  ) THEN
+    ALTER TABLE extractions
+      ADD CONSTRAINT extractions_invoice_id_fkey
+      FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE SET NULL;
+  END IF;
+END;
+$$;
+
+CREATE INDEX IF NOT EXISTS idx_extractions_invoice_id
+  ON extractions (invoice_id);
+CREATE INDEX IF NOT EXISTS idx_extractions_needs_review
+  ON extractions (needs_review) WHERE needs_review = TRUE;
 
 -- Invoice line items
 CREATE TABLE IF NOT EXISTS invoice_lines (

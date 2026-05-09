@@ -35,6 +35,7 @@ from apps.api.services.alert_notifications import (
     send_alert_to_slack,
 )
 from apps.api.repos.invoices import ensure_vendor, replace_lines, upsert_invoice
+from apps.api.repos.extractions import insert_extraction
 from apps.api.repos.alerts import insert_alert_candidates
 from apps.api.models.invoice import Invoice
 from apps.api.storage import s3
@@ -142,6 +143,15 @@ async def extract_document(
             vendor_id = ensure_vendor(conn, str(org_id), inv.vendor)
             invoice_id = upsert_invoice(conn, str(org_id), str(vendor_id), inv.dict(), raw_doc_id)
             replace_lines(conn, str(invoice_id), [ln.dict() for ln in inv.lines])
+            insert_extraction(
+                conn,
+                raw_doc_id=raw_doc_id,
+                invoice_id=str(invoice_id),
+                confidence=invoice_confidence,
+                field_confidence=field_confidence,
+                warnings=warnings,
+                needs_review=review_flag,
+            )
             return str(invoice_id)
 
     for inv in invoices:
