@@ -87,6 +87,18 @@ async def upload_file(
                     return
                 body = await resp.json()
 
+            if body.get("duplicate"):
+                counters["skipped"] += 1
+                counters["done"] += 1
+                done, total = counters["done"], counters["total"]
+                if done % 20 == 0 or done == total:
+                    print(
+                        f"  {done}/{total}  ok={counters['ok']}  skipped={counters['skipped']}  err={counters['error']}",
+                        end="\r",
+                        flush=True,
+                    )
+                return
+
             raw_doc_id = body.get("raw_doc_id")
             async with session.post(
                 f"{api_url}/extract/structured",
@@ -132,7 +144,7 @@ async def main(invoice_dir: pathlib.Path, api_url: str, concurrency: int) -> Non
     print(f"Workers  : {concurrency}")
     print()
 
-    counters = {"ok": 0, "error": 0, "done": 0, "total": len(files)}
+    counters = {"ok": 0, "skipped": 0, "error": 0, "done": 0, "total": len(files)}
     semaphore = asyncio.Semaphore(concurrency)
 
     connector = aiohttp.TCPConnector(limit=concurrency)
@@ -143,7 +155,7 @@ async def main(invoice_dir: pathlib.Path, api_url: str, concurrency: int) -> Non
         ]
         await asyncio.gather(*tasks)
 
-    print(f"\nDone. uploaded={counters['ok']}  errors={counters['error']}")
+    print(f"\nDone. uploaded={counters['ok']}  skipped={counters['skipped']}  errors={counters['error']}")
     if counters["ok"] > 0:
         print("unit_price_delta and vendor_volume_spike alerts should appear in the SSE stream shortly.")
 

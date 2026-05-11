@@ -8,6 +8,7 @@ type UploadStatus =
   | "uploaded"
   | "extracting"
   | "complete"
+  | "duplicate"
   | "error";
 
 export default function Page() {
@@ -59,6 +60,15 @@ export default function Page() {
 
       const ingestData = await ingestRes.json();
       const rawDocId = ingestData.raw_doc_id;
+
+      if (ingestData.duplicate) {
+        setStatus("duplicate");
+        setStatusMessage(
+          `Upload skipped: this exact file was already uploaded (raw_doc_id=${rawDocId})`
+        );
+        return;
+      }
+
       setStatus("uploaded");
       setStatusMessage("File uploaded successfully");
 
@@ -101,6 +111,7 @@ export default function Page() {
   };
 
   const isProcessing = status === "uploading" || status === "extracting";
+  const isTerminal = status === "complete" || status === "duplicate" || status === "error";
 
   const steps: { key: UploadStatus | "uploaded"; label: string }[] = [
     { key: "uploading", label: "Upload" },
@@ -265,6 +276,17 @@ export default function Page() {
             <div style={{ fontSize: "0.8125rem", color: "var(--text-muted)" }}>
               {statusMessage}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Duplicate */}
+      {status === "duplicate" && (
+        <div className="alert-banner warning">
+          <div className="alert-title">Already uploaded</div>
+          <div style={{ fontSize: "0.8125rem" }}>
+            <strong>{file?.name}</strong> was not re-processed — this exact file
+            already exists in the system. No extraction or scoring will run.
           </div>
         </div>
       )}
