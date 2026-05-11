@@ -13,7 +13,7 @@ Run --use-db only after upload_clean_invoices.py + ARQ worker have fully process
 all clean invoices.
 
 Anomaly types:
-  - duplicate_invoice_no      : same invoice_no as an existing invoice
+  - duplicate_invoice_no_same_vendor : same invoice_no reused by the same vendor
   - price_spike               : unit_price 3-5x the vendor baseline
   - quantity_spike            : qty 4-6x normal
   - tax_mismatch              : tax does not match expected rate
@@ -67,7 +67,7 @@ ANOMALY_WEIGHTS = {
     "quantity_spike":         15,
     "tax_mismatch":           10,
     "vendor_name_variation":  10,
-    "duplicate_invoice_no":    8,
+    "duplicate_invoice_no_same_vendor": 8,
     "duplicate_submission":    8,
     "out_of_cadence":          8,
     "negative_line_item":      8,
@@ -78,7 +78,7 @@ ANOMALY_WEIGHTS = {
 DETECTABILITY = {
     "price_spike":           "current_rules",
     "quantity_spike":        "current_rules",
-    "duplicate_invoice_no":  "current_rules",
+    "duplicate_invoice_no_same_vendor": "current_rules",
     "duplicate_submission":  "current_rules",
     "excessive_consulting":  "current_rules",
     "tax_mismatch":          "future_rag",
@@ -298,22 +298,21 @@ def inject_vendor_name_variation(inv: dict, rng: random.Random, vmap: dict) -> t
     }
 
 
-def inject_duplicate_invoice_no(inv: dict, existing_nos: set, rng: random.Random) -> tuple[dict, dict]:
+def inject_duplicate_invoice_no(inv: dict, vendor_invoices: list[dict], rng: random.Random) -> tuple[dict, dict]:
     result = copy.deepcopy(inv)
-    candidates = list(existing_nos - {inv["invoice_no"]})
-    if candidates:
-        result["invoice_no"] = rng.choice(candidates)
-    else:
-        result["invoice_no"] = inv["invoice_no"]
+    same_vendor_nos = [i["invoice_no"] for i in vendor_invoices if i["invoice_no"] != inv["invoice_no"]]
+    if not same_vendor_nos:
+        raise ValueError(f"No other invoices for vendor '{inv['vendor']}' to steal an invoice_no from")
+    result["invoice_no"] = rng.choice(same_vendor_nos)
     orig_date = date.fromisoformat(inv["invoice_date"])
     result["invoice_date"] = (orig_date + timedelta(days=rng.randint(1, 5))).isoformat()
     return result, {
-        "anomaly_type": "duplicate_invoice_no",
+        "anomaly_type": "duplicate_invoice_no_same_vendor",
         "severity": "medium",
         "explanation": (
-            f"Invoice number {result['invoice_no']} already exists in the system. "
+            f"Invoice number {result['invoice_no']} from {inv['vendor']} already exists in the system. "
             f"This duplicate was submitted {abs((date.fromisoformat(result['invoice_date']) - orig_date).days)} "
-            f"days after the original, suggesting a duplicate payment attempt."
+            f"days after the original, suggesting a duplicate payment attempt by the same vendor."
         ),
     }
 
@@ -538,8 +537,8 @@ def inject(
                 modified, meta = inject_tax_mismatch(base, rng)
             elif anomaly_type == "vendor_name_variation":
                 modified, meta = inject_vendor_name_variation(base, rng, vmap)
-            elif anomaly_type == "duplicate_invoice_no":
-                modified, meta = inject_duplicate_invoice_no(base, all_nos, rng)
+            elif anomaly_type == "duplicate_invoice_no_same_vendor":
+                modified, meta = inject_duplicate_invoice_no(base, by_vendor.get(base["vendor"], []), rng)
             elif anomaly_type == "duplicate_submission":
                 modified, meta = inject_duplicate_submission(base, rng)
             elif anomaly_type == "out_of_cadence":
@@ -557,7 +556,7 @@ def inject(
                 print(f"  [warn] {anomaly_type} injection failed on {base['invoice_no']}: {e}")
             continue
 
-        if anomaly_type not in ("duplicate_invoice_no", "duplicate_submission"):
+        if anomaly_type not in ("duplicate_invoice_no_same_vendor", "duplicate_submission"):
             modified["invoice_no"] = f"ANOM-{len(anomalies)+1:04d}-{modified['invoice_no']}"
 
         _save_invoice(modified, output_dir)
