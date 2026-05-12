@@ -28,13 +28,13 @@ from apps.api.services.validator import (
     needs_review,
     validate_invoice,
 )
-from apps.api.services.anomaly_scoring import score_invoice
+from apps.api.services.anomaly_scoring import AlertCandidate, score_invoice
 from apps.api.services.alert_notifications import (
     build_invoice_link,
     build_sse_payload,
     send_alert_to_slack,
 )
-from apps.api.repos.invoices import ensure_vendor, replace_lines, upsert_invoice
+from apps.api.repos.invoices import ensure_vendor, replace_lines, upsert_invoice, find_invoice_by_key, insert_invoice
 from apps.api.repos.extractions import insert_extraction
 from apps.api.repos.alerts import insert_alert_candidates
 from apps.api.models.invoice import Invoice
@@ -135,13 +135,50 @@ async def extract_document(
         return {"ok": False, "errors": [{"message": f"Unknown doc_type: {doc_type}"}]}
 
     # 3. Persist each invoice using the sync pool in a thread executor
-    invoice_ids: list[str] = []
-
-    def _persist(inv: Invoice) -> str:
+    def _persist(inv: Invoice) -> tuple[str | None, AlertCandidate | None]:
         with sync_pool.connection() as conn:
             conn.execute("SELECT set_config('app.org_id', %s, true)", (str(org_id),))
             vendor_id = ensure_vendor(conn, str(org_id), inv.vendor)
-            invoice_id = upsert_invoice(conn, str(org_id), str(vendor_id), inv.dict(), raw_doc_id)
+            existing = find_invoice_by_key(conn, str(org_id), str(vendor_id), inv.invoice_no)
+
+            if existing:
+                existing_invoice_id = str(existing["id"])
+                matched = ["vendor_id", "invoice_no"]
+                if existing["total"] is not None and float(existing["total"]) == float(inv.total):
+                    matched.append("total")
+                severity = "critical" if "total" in matched else "high"
+                insert_extraction(
+                    conn,
+                    raw_doc_id=raw_doc_id,
+                    invoice_id=None,
+                    confidence=invoice_confidence,
+                    field_confidence=field_confidence,
+                    warnings=warnings,
+                    needs_review=True,
+                )
+                dup_alert = AlertCandidate(
+                    org_id=str(org_id),
+                    invoice_id=existing_invoice_id,
+                    vendor_id=str(vendor_id),
+                    type="duplicate_invoice",
+                    severity=severity,
+                    message=(
+                        f"Invoice {inv.invoice_no} from {inv.vendor} was re-submitted — "
+                        f"matches existing invoice on {', '.join(matched)}."
+                    ),
+                    meta={
+                        "rule": "duplicate_invoice_no_same_vendor",
+                        "existing_invoice_id": existing_invoice_id,
+                        "incoming_raw_doc_id": raw_doc_id,
+                        "incoming_invoice_no": inv.invoice_no,
+                        "incoming_total": float(inv.total),
+                        "matched_fields": matched,
+                    },
+                )
+                insert_alert_candidates(conn, [dup_alert])
+                return None, dup_alert
+
+            invoice_id = insert_invoice(conn, str(org_id), str(vendor_id), inv.dict(), raw_doc_id)
             replace_lines(conn, str(invoice_id), [ln.dict() for ln in inv.lines])
             insert_extraction(
                 conn,
@@ -152,20 +189,32 @@ async def extract_document(
                 warnings=warnings,
                 needs_review=review_flag,
             )
-            return str(invoice_id)
+            return str(invoice_id), None
 
+    results: list[tuple[str | None, AlertCandidate | None]] = []
     for inv in invoices:
-        invoice_id = await loop.run_in_executor(None, _persist, inv)
-        invoice_ids.append(invoice_id)
+        result = await loop.run_in_executor(None, _persist, inv)
+        results.append(result)
 
-    # 4. Enqueue scoring for each persisted invoice
+    # 4. Enqueue scoring or publish duplicate alert SSE for each invoice
     arq_pool = ctx["arq_pool"]
-    for iid in invoice_ids:
-        await arq_pool.enqueue_job(
-            "score_invoice_job",
-            org_id=org_id,
-            invoice_id=iid,
-        )
+    channel = f"sse:{org_id}"
+    invoice_ids: list[str] = []
+
+    for inv, (invoice_id, dup_alert) in zip(invoices, results):
+        if dup_alert is not None:
+            try:
+                payload = build_sse_payload(dup_alert)
+                await arq_pool.publish(channel, json.dumps(payload))
+            except Exception:
+                logger.exception("Failed to publish duplicate invoice SSE event.")
+        elif invoice_id is not None:
+            invoice_ids.append(invoice_id)
+            await arq_pool.enqueue_job(
+                "score_invoice_job",
+                org_id=org_id,
+                invoice_id=invoice_id,
+            )
 
     last_id = invoice_ids[-1] if invoice_ids else None
     return {

@@ -1,5 +1,6 @@
 from typing import Optional, List, Dict, Any
 from psycopg import Connection
+from psycopg.rows import dict_row
 from decimal import Decimal
 
 # Ensures that a vendor record exists for a given organization and returns its ID.
@@ -22,6 +23,48 @@ def ensure_vendor(conn: Connection, org_id: str, name: str) -> str:
             params,
         )
         return cur.fetchone()[0]
+
+def find_invoice_by_key(
+    conn: Connection, org_id: str, vendor_id: str, invoice_no: str
+) -> Optional[Dict[str, Any]]:
+    """Return {id, raw_doc_id, total, invoice_date} for an existing invoice, or None."""
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            "SELECT id, raw_doc_id, total, invoice_date FROM invoices "
+            "WHERE org_id = %s AND vendor_id = %s AND invoice_no = %s",
+            (org_id, vendor_id, invoice_no),
+        )
+        return cur.fetchone()
+
+
+def insert_invoice(
+    conn: Connection, org_id: str, vendor_id: str, payload: dict, raw_doc_id: Optional[int]
+) -> str:
+    """Pure INSERT — caller must have confirmed no existing row via find_invoice_by_key."""
+    sql = """
+    INSERT INTO invoices
+      (id, org_id, vendor_id, invoice_no, invoice_date, due_date,
+       currency, subtotal, tax, total, status, raw_doc_id, created_at)
+    VALUES
+      (gen_random_uuid(), %(org_id)s, %(vendor_id)s, %(invoice_no)s, %(invoice_date)s, %(due_date)s,
+       %(currency)s, %(subtotal)s, %(tax)s, %(total)s, 'received', %(raw_doc_id)s, now())
+    RETURNING id;
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, {
+            "org_id": org_id,
+            "vendor_id": vendor_id,
+            "invoice_no": payload["invoice_no"],
+            "invoice_date": payload["invoice_date"],
+            "due_date": payload.get("due_date"),
+            "currency": payload["currency"],
+            "subtotal": Decimal(payload["subtotal"]),
+            "tax": Decimal(payload["tax"]),
+            "total": Decimal(payload["total"]),
+            "raw_doc_id": raw_doc_id,
+        })
+        return cur.fetchone()[0]
+
 
 # Inserts or updates an invoice (upsert) for a given vendor/org based on invoice_no.
 # Prevents duplicates and ensures invoice data stays consistent when reprocessed.
