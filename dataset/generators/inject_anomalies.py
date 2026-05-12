@@ -80,7 +80,7 @@ DETECTABILITY = {
     "quantity_spike":        "current_rules",
     "duplicate_invoice_no_same_vendor": "current_rules",
     "duplicate_submission":  "current_rules",
-    "excessive_consulting":  "current_rules",
+    "excessive_consulting":  "future_rag",
     "tax_mismatch":          "future_rag",
     "vendor_name_variation": "future_rag",
     "out_of_cadence":        "future_rag",
@@ -117,6 +117,7 @@ def _fetch_price_baselines(db_url: str, org_id: str) -> list[dict]:
                 WHERE s.org_id = %(org_id)s
                   AND s.sample_size >= %(min)s
                   AND s.median_unit_price > 0
+                  AND s.sku IS NOT NULL
                 ORDER BY v.name, s.sku
                 """,
                 {"org_id": org_id, "min": MIN_SAMPLE_SIZE},

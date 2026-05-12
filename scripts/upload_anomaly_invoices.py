@@ -37,6 +37,13 @@ DEFAULT_DIR         = pathlib.Path("dataset/generated/anomalies")
 DEFAULT_API         = "http://localhost:8000"
 DEFAULT_CONCURRENCY = 10
 
+CURRENT_RULES_TYPES = {
+    "price_spike",
+    "quantity_spike",
+    "duplicate_invoice_no_same_vendor",
+    "duplicate_submission",
+}
+
 
 def resolve_demo_ids() -> tuple[str, str]:
     with psycopg.connect(DB_URL) as conn, conn.cursor() as cur:
@@ -89,14 +96,6 @@ async def upload_file(
 
             if body.get("duplicate"):
                 counters["skipped"] += 1
-                counters["done"] += 1
-                done, total = counters["done"], counters["total"]
-                if done % 20 == 0 or done == total:
-                    print(
-                        f"  {done}/{total}  ok={counters['ok']}  skipped={counters['skipped']}  err={counters['error']}",
-                        end="\r",
-                        flush=True,
-                    )
                 return
 
             raw_doc_id = body.get("raw_doc_id")
@@ -128,14 +127,39 @@ async def upload_file(
 
 
 async def main(invoice_dir: pathlib.Path, api_url: str, concurrency: int) -> None:
-    files = sorted(invoice_dir.glob("ANOM-*.json"))
-    if not files:
+    all_files = sorted(invoice_dir.glob("ANOM-*.json")) + sorted(invoice_dir.glob("INV-*.json"))
+    if not all_files:
         sys.exit(
             f"[error] No ANOM-*.json files found in {invoice_dir}\n"
             "Run: python dataset/generators/inject_anomalies.py --use-db"
         )
 
-    print(f"Found {len(files)} anomaly invoice files in {invoice_dir}")
+    # anomaly_type lives in the manifest, not in the individual invoice files
+    manifest_path = invoice_dir.parent / "anomalies.json"
+    if not manifest_path.exists():
+        sys.exit(f"[error] Manifest not found at {manifest_path} — run inject_anomalies.py first")
+    manifest: dict[str, str] = {
+        entry["invoice_no"]: entry["anomaly_type"]
+        for entry in json.loads(manifest_path.read_text())
+    }
+
+    files = []
+    skipped_types: dict[str, int] = {}
+    for f in all_files:
+        invoice_no = f.stem  # filename without .json
+        anomaly_type = manifest.get(invoice_no, "")
+        if anomaly_type in CURRENT_RULES_TYPES:
+            files.append(f)
+        else:
+            skipped_types[anomaly_type] = skipped_types.get(anomaly_type, 0) + 1
+
+    if skipped_types:
+        print(f"Skipping non-current-rules types: { {k: v for k, v in sorted(skipped_types.items())} }")
+
+    if not files:
+        sys.exit("[error] No current_rules anomaly files found after filtering.")
+
+    print(f"Found {len(files)}/{len(all_files)} anomaly invoice files matching current_rules types")
 
     org_id, user_id = resolve_demo_ids()
     print(f"Org ID   : {org_id}")
