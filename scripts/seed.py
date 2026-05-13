@@ -177,7 +177,10 @@ CREATE TABLE IF NOT EXISTS alerts (
   acknowledged_at TIMESTAMPTZ,
   acknowledged_by UUID REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  resolved BOOLEAN NOT NULL DEFAULT FALSE
+  resolved BOOLEAN NOT NULL DEFAULT FALSE,
+  explanation_text TEXT NULL,
+  explanation_json JSONB NULL,
+  explanation_generated_at TIMESTAMPTZ NULL
 );
 
 -- Partial index for quick unread counts by severity
@@ -189,6 +192,19 @@ CREATE INDEX IF NOT EXISTS idx_alerts_severity_unresolved
 CREATE INDEX IF NOT EXISTS idx_alerts_org_created_unresolved
   ON alerts (org_id, created_at DESC)
   WHERE resolved = FALSE;
+
+-- RAG explanation columns (safe to run on existing DBs)
+DO $migrate$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'alerts' AND column_name = 'explanation_text'
+  ) THEN
+    ALTER TABLE alerts ADD COLUMN explanation_text TEXT NULL;
+    ALTER TABLE alerts ADD COLUMN explanation_json JSONB NULL;
+    ALTER TABLE alerts ADD COLUMN explanation_generated_at TIMESTAMPTZ NULL;
+  END IF;
+END $migrate$;
 
 -- Audit log
 CREATE TABLE IF NOT EXISTS audit_log (

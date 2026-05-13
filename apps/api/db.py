@@ -3,7 +3,7 @@ from psycopg import sql
 
 from apps.api.settings import settings
 
-pool = ConnectionPool(conninfo=settings.app_db_url, min_size=1, max_size=10)
+pool = ConnectionPool(conninfo=settings.app_db_url, min_size=1, max_size=10, open=False)
 async_pool = AsyncConnectionPool(conninfo=settings.app_db_url, min_size=1, max_size=10, open=False)
 
 def get_raw_doc_by_hash(*, org_id: str, sha256: str):
