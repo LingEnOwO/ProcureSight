@@ -11,6 +11,29 @@ from fastapi import Depends
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
 
+@router.get("/{alert_id}/explanation")
+def get_alert_explanation(
+    alert_id: str,
+    user_ctx: UserContext = Depends(get_user_context),
+) -> Dict[str, Any]:
+    """Retrieve (or lazily generate) a cached explanation for an alert.
+
+    Returns immediately if an explanation exists; generates one otherwise.
+    """
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT set_config('app.org_id', %s, true)", (user_ctx.org_id,))
+            cur.execute("SELECT set_config('app.actor_id', %s, true)", (user_ctx.business_user_id,))
+        try:
+            result = explain_alert(conn, user_ctx.org_id, alert_id, force=False)
+        except ValueError as exc:
+            msg = str(exc)
+            if "not found" in msg:
+                raise HTTPException(status_code=404, detail=msg)
+            raise HTTPException(status_code=400, detail=msg)
+    return result
+
+
 @router.post("/{alert_id}/explain")
 def explain_alert_endpoint(
     alert_id: str,

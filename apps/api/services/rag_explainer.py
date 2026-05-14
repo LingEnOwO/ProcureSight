@@ -189,6 +189,7 @@ def _build_response(
     llm_output: Dict[str, Any],
     explanation_text: str,
     cached: bool,
+    source: str = "llm",
 ) -> Dict[str, Any]:
     # Normalise evidence for the API response
     current = evidence.get("current_invoice") or evidence.get("duplicate_invoice") or {}
@@ -204,6 +205,7 @@ def _build_response(
         "alert_type": alert["type"],
         "severity": alert.get("severity"),
         "explanation": explanation_text,
+        "source": source,
         "llm_output": llm_output,
         "evidence": {
             "current_invoice": current,
@@ -261,6 +263,7 @@ def explain_alert(
             llm_output=cached_json,
             explanation_text=alert["explanation_text"],
             cached=True,
+            source=cached_json.get("source", "llm"),
         )
 
     evidence = retrieve_evidence(conn, alert)
@@ -268,8 +271,10 @@ def explain_alert(
 
     try:
         llm_output = generate_explanation(prompt)
+        llm_output["source"] = "llm"
     except LLMUnavailableError:
         llm_output = _generate_fallback(alert, evidence)
+        llm_output["source"] = "template"
 
     explanation_text = _render_text(llm_output)
     save_explanation(conn, org_id, alert_id, explanation_text, llm_output)
@@ -280,4 +285,5 @@ def explain_alert(
         llm_output=llm_output,
         explanation_text=explanation_text,
         cached=False,
+        source=llm_output["source"],
     )
