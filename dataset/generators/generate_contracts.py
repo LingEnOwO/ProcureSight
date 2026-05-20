@@ -534,15 +534,8 @@ def generate(
         content = generate_contract(vendor, contract_no, rng, start_date)
         safe_name = vendor.name.replace(" ", "_").replace("/", "_").replace("&", "and").lower()
 
-        # Write .txt version
         txt_path = contracts_dir / f"{safe_name}_contract.txt"
         txt_path.write_text(content, encoding="utf-8")
-
-        # Write .md version with light markdown headers
-        md_content = content.replace("==========================", "")
-        md_content = md_content.replace("VENDOR SERVICES AGREEMENT\n", "# VENDOR SERVICES AGREEMENT\n")
-        md_path = contracts_dir / f"{safe_name}_contract.md"
-        md_path.write_text(md_content, encoding="utf-8")
 
         contract_count += 1
 
@@ -554,7 +547,7 @@ def generate(
         (sample_contracts_dir / f"{safe_name}_contract.txt").write_text(content, encoding="utf-8")
 
     if verbose:
-        print(f"  Wrote {contract_count} contracts ({contract_count} .txt + {contract_count} .md) → {contracts_dir}")
+        print(f"  Wrote {contract_count} contracts (.txt) → {contracts_dir}")
         print(f"  Wrote 3 sample contracts → {sample_contracts_dir}")
 
     # ── Policies ──────────────────────────────────────────────────────────────
