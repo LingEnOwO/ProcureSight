@@ -219,7 +219,7 @@ def test_search_chunks_returns_empty_without_api_key(db_conn, org_id):
 # 3. Anomaly scorer
 # ---------------------------------------------------------------------------
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_scorer_detects_excessive_consulting(db_conn, org_id, vendor_id):
     """Score an invoice with consulting lines totalling > $5k; expect alert."""
     from apps.api.services.anomaly_scoring import _score_excessive_consulting_for_invoice
@@ -245,7 +245,7 @@ async def test_scorer_detects_excessive_consulting(db_conn, org_id, vendor_id):
     assert c.meta["consulting_total"] == pytest.approx(12000.0, abs=1)
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_scorer_high_severity_when_rate_exceeded(db_conn, org_id, vendor_id):
     """When contract rate is found and exceeded, severity should be high."""
     from apps.api.services.anomaly_scoring import _score_excessive_consulting_for_invoice
@@ -277,7 +277,7 @@ async def test_scorer_high_severity_when_rate_exceeded(db_conn, org_id, vendor_i
     assert c.meta["invoice_rate"] == pytest.approx(275.0, abs=0.1)
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_scorer_no_alert_without_consulting_lines(db_conn, org_id, vendor_id):
     """Non-consulting invoice should produce no excessive_consulting alert."""
     from apps.api.services.anomaly_scoring import _score_excessive_consulting_for_invoice
@@ -295,7 +295,7 @@ async def test_scorer_no_alert_without_consulting_lines(db_conn, org_id, vendor_
     assert candidates == []
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_scorer_no_alert_below_threshold(db_conn, org_id, vendor_id):
     """Consulting invoice below threshold with no contract rate should not alert."""
     from apps.api.services.anomaly_scoring import _score_excessive_consulting_for_invoice
