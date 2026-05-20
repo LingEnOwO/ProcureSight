@@ -205,6 +205,61 @@ def retrieve_duplicate_invoice(conn: Connection, alert: Dict[str, Any]) -> Dict[
     }
 
 
+def retrieve_excessive_consulting(conn: Connection, alert: Dict[str, Any]) -> Dict[str, Any]:
+    """Evidence for excessive_consulting alerts.
+
+    Re-uses vector evidence already stored in meta_json during scoring.
+    Falls back to a fresh vector search if meta is absent (e.g. older alerts).
+    """
+    meta = alert.get("meta_json") or {}
+    invoice_id = alert.get("invoice_id") or meta.get("invoice_id")
+
+    current_invoice = get_invoice_with_lines(conn, invoice_id) if invoice_id else None
+
+    # Prefer pre-computed evidence from scoring; fall back to a fresh search.
+    vector_evidence: List[Dict[str, Any]] = meta.get("vector_evidence") or []
+    if not vector_evidence and invoice_id:
+        from .vector_retrieval import search_chunks
+        query = "consulting rate limit professional services cap hourly rate"
+        raw = search_chunks(conn, alert["org_id"], query, source_types=["contract", "policy"])
+        vector_evidence = [
+            {
+                "source_type": c["source_type"],
+                "source_name": c["source_name"],
+                "snippet": c["chunk_text"][:300],
+                "similarity": float(c["similarity"]) if c.get("similarity") is not None else None,
+            }
+            for c in raw
+        ]
+
+    invoice_facts: Dict[str, Any] = {}
+    if current_invoice:
+        consulting_total = meta.get("consulting_total")
+        consulting_lines = meta.get("consulting_lines") or []
+        hours = sum(
+            ln["qty"] for ln in consulting_lines if ln.get("qty") is not None
+        )
+        invoice_facts = {
+            "vendor": alert.get("vendor_name") or current_invoice.get("vendor_name"),
+            "invoice_no": current_invoice.get("invoice_no"),
+            "invoice_date": str(current_invoice.get("invoice_date") or ""),
+            "consulting_amount": f"${float(consulting_total):,.2f}" if consulting_total else "N/A",
+            "consulting_hours": f"{hours:.1f}" if hours else "N/A",
+        }
+
+    return {
+        "current_invoice": current_invoice,
+        "vendor_name": alert.get("vendor_name"),
+        "vector_evidence": vector_evidence,
+        "invoice_facts": invoice_facts,
+        "metrics": {
+            "consulting_total": meta.get("consulting_total"),
+            "contract_rate_found": meta.get("contract_rate_found"),
+            "invoice_rate": meta.get("invoice_rate"),
+        },
+    }
+
+
 def retrieve_evidence(conn: Connection, alert: Dict[str, Any]) -> Dict[str, Any]:
     """Dispatch to the appropriate evidence retriever based on alert type."""
     alert_type = alert.get("type", "")
@@ -214,4 +269,6 @@ def retrieve_evidence(conn: Connection, alert: Dict[str, Any]) -> Dict[str, Any]
         return retrieve_vendor_volume_spike(conn, alert)
     if alert_type == "duplicate_invoice":
         return retrieve_duplicate_invoice(conn, alert)
+    if alert_type == "excessive_consulting":
+        return retrieve_excessive_consulting(conn, alert)
     return {}

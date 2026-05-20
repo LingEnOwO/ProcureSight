@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -518,6 +519,229 @@ async def _score_contract_policy_violations_for_invoice(
     return candidates
 
 
+# ── Excessive consulting thresholds ─────────────────────────────────────────
+_CONSULTING_KEYWORDS = {
+    "consulting",
+    "advisory",
+    "professional services",
+    "professional fee",
+    "management consulting",
+}
+_CONSULTING_TOTAL_MEDIUM_THRESHOLD = 5_000.0  # flag if total > $5k and no contract found
+_DOLLAR_PATTERN = re.compile(r"\$\s*([\d,]+(?:\.\d+)?)")
+_PER_HOUR_PATTERN = re.compile(r"per\s+hour|/\s*hr\b|hourly", re.IGNORECASE)
+
+
+def _is_consulting_line(desc: str) -> bool:
+    desc_lower = desc.lower()
+    return any(kw in desc_lower for kw in _CONSULTING_KEYWORDS)
+
+
+def _extract_rates_from_text(text: str) -> list:
+    """Return all hourly rates found in text.
+
+    Handles both inline format ($185.00 per hour) and contract format where
+    'per hour' appears in the service name on the same line as the price:
+      - Software Engineering Consulting (per hour): $185.00 ± $15.00 per unit
+    """
+    rates = []
+    for line in text.splitlines():
+        if _PER_HOUR_PATTERN.search(line):
+            m = _DOLLAR_PATTERN.search(line)
+            if m:
+                try:
+                    rates.append(float(m.group(1).replace(",", "")))
+                except ValueError:
+                    pass
+    return rates
+
+
+async def _search_chunks_async(
+    db: Any,
+    org_id: str,
+    query: str,
+    source_types: Optional[List[str]] = None,
+    limit: int = 5,
+) -> List[Dict[str, Any]]:
+    """Async wrapper: embeds the query and queries doc_chunks via the async DB."""
+    import os
+    try:
+        from openai import OpenAI
+        from apps.api.settings import settings
+        api_key = os.getenv("OPENAI_API_KEY") or settings.OPENAI_API_KEY
+        if not api_key:
+            return []
+        client = OpenAI(api_key=api_key)
+        resp = client.embeddings.create(
+            model=settings.EMBEDDING_MODEL,
+            input=[query],
+            dimensions=settings.EMBEDDING_DIMENSIONS,
+        )
+        vector = resp.data[0].embedding
+        vector_str = "[" + ",".join(str(v) for v in vector) + "]"
+    except Exception:
+        return []
+
+    query_sql = """
+        SELECT
+          id,
+          source_type,
+          source_name,
+          chunk_text,
+          meta_json,
+          1 - (embedding <=> %(vec)s::vector) AS similarity
+        FROM doc_chunks
+        WHERE org_id = %(org_id)s
+          AND (%(types)s::text[] IS NULL OR source_type = ANY(%(types)s::text[]))
+        ORDER BY embedding <=> %(vec)s::vector
+        LIMIT %(limit)s
+    """
+    async with db.cursor(row_factory=dict_row) as cur:
+        await cur.execute(
+            query_sql,
+            {"vec": vector_str, "org_id": org_id, "types": source_types, "limit": limit},
+        )
+        return await cur.fetchall()
+
+
+async def _score_excessive_consulting_for_invoice(
+    db: Any,
+    *,
+    org_id: str,
+    invoice_id: str,
+) -> List[AlertCandidate]:
+    """
+    Rule: flag invoices that appear to contain excessive consulting/professional
+    services spend relative to contract or policy limits found via vector search.
+
+    Severity:
+      high   — contract rate limit found and invoice rate exceeds it
+      medium — consulting total > threshold and no contract evidence found
+    """
+    rows = await _fetch_invoice_lines(db, org_id=org_id, invoice_id=invoice_id)
+    if not rows:
+        return []
+
+    header = rows[0]
+    vendor_id = header["vendor_id"]
+    invoice_no = header["invoice_no"]
+
+    consulting_lines = [
+        r for r in rows
+        if r["desc"] and _is_consulting_line(r["desc"])
+    ]
+    if not consulting_lines:
+        return []
+
+    consulting_total = sum(
+        float(r["line_total"]) for r in consulting_lines if r["line_total"] is not None
+    )
+    invoice_rates = [
+        float(r["unit_price"])
+        for r in consulting_lines
+        if r["unit_price"] is not None and float(r["unit_price"]) > 50
+    ]
+    max_invoice_rate = max(invoice_rates) if invoice_rates else None
+
+    # Vector search for relevant contract/policy clauses
+    query_text = " ".join(
+        r["desc"] for r in consulting_lines if r["desc"]
+    ) + " consulting rate limit professional services cap hourly rate"
+    chunks = await _search_chunks_async(
+        db, org_id, query_text, source_types=["contract", "policy"], limit=5
+    )
+
+    # Only trust chunks with similarity ≥ 0.75 to avoid spurious rate comparisons
+    # from unrelated contracts that happened to rank in the top-k.
+    high_sim_chunks = [
+        c for c in chunks
+        if c.get("similarity") is not None and float(c["similarity"]) >= 0.75
+    ]
+
+    # Extract the maximum allowed hourly rate across all high-similarity chunks.
+    # Using max (not min) because contracts list multiple tiers (e.g. $150 analyst,
+    # $350 senior partner) — we only flag when the invoice rate exceeds the highest
+    # contracted tier, which is the clearest sign of an out-of-contract charge.
+    contract_rate: Optional[float] = None
+    for chunk in high_sim_chunks:
+        for rate in _extract_rates_from_text(chunk.get("chunk_text", "")):
+            if contract_rate is None or rate > contract_rate:
+                contract_rate = rate
+
+    vector_evidence = [
+        {
+            "source_type": c["source_type"],
+            "source_name": c["source_name"],
+            "snippet": c["chunk_text"][:300],
+            "similarity": float(c["similarity"]) if c.get("similarity") is not None else None,
+        }
+        for c in chunks
+    ]
+
+    severity: Optional[str] = None
+    reason = ""
+
+    if contract_rate is not None and max_invoice_rate is not None:
+        if max_invoice_rate > contract_rate * 1.10:  # 10% tolerance for rounding/minor variance
+            severity = "high"
+            reason = (
+                f"Invoice hourly rate {max_invoice_rate:.2f} exceeds contract rate limit "
+                f"{contract_rate:.2f} found in retrieved contract/policy evidence."
+            )
+    elif high_sim_chunks and contract_rate is None and consulting_total > _CONSULTING_TOTAL_MEDIUM_THRESHOLD:
+        # Relevant contracts were found but none specified an hourly rate —
+        # flag for manual review since we can't validate the charges.
+        severity = "medium"
+        reason = (
+            f"Consulting total {consulting_total:.2f} exceeds the "
+            f"{_CONSULTING_TOTAL_MEDIUM_THRESHOLD:.0f} review threshold. "
+            "No explicit contract rate limit found in retrieved documents."
+        )
+
+    if severity is None:
+        return []
+
+    line_summaries = [
+        {
+            "desc": r["desc"],
+            "qty": float(r["qty"]) if r["qty"] is not None else None,
+            "unit_price": float(r["unit_price"]) if r["unit_price"] is not None else None,
+            "line_total": float(r["line_total"]) if r["line_total"] is not None else None,
+        }
+        for r in consulting_lines
+    ]
+
+    message = (
+        f"Invoice {invoice_no or invoice_id} from vendor {vendor_id} contains "
+        f"consulting/professional services charges totalling {consulting_total:.2f}. "
+        f"{reason}"
+    )
+
+    meta: Dict[str, Any] = {
+        "rule": "excessive_consulting",
+        "consulting_total": consulting_total,
+        "consulting_lines": line_summaries,
+        "vector_evidence": vector_evidence,
+        "contract_rate_found": contract_rate,
+        "invoice_rate": max_invoice_rate,
+        "invoice_no": invoice_no,
+        "invoice_id": str(invoice_id),
+        "vendor_id": str(vendor_id),
+    }
+
+    return [
+        AlertCandidate(
+            org_id=str(org_id),
+            invoice_id=str(invoice_id),
+            vendor_id=str(vendor_id),
+            type="excessive_consulting",
+            severity=severity,
+            message=message,
+            meta=meta,
+        )
+    ]
+
+
 async def score_invoice(
     db: Any,
     *,
@@ -550,6 +774,12 @@ async def score_invoice(
 
     alerts.extend(
         await _score_contract_policy_violations_for_invoice(
+            db, org_id=org_id, invoice_id=invoice_id
+        )
+    )
+
+    alerts.extend(
+        await _score_excessive_consulting_for_invoice(
             db, org_id=org_id, invoice_id=invoice_id
         )
     )

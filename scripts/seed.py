@@ -7,6 +7,9 @@ ddl = """
 -- Enable pgcrypto for UUID generation
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+-- Enable pgvector for semantic search
+CREATE EXTENSION IF NOT EXISTS vector;
+
 -- === Base entities ===
 -- Organizations
 CREATE TABLE IF NOT EXISTS orgs (
@@ -163,6 +166,24 @@ CREATE TABLE IF NOT EXISTS vendor_contracts (
   UNIQUE (org_id, vendor_id)
 );
 
+-- === Document chunks for vector search (RAG) ===
+CREATE TABLE IF NOT EXISTS doc_chunks (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id      UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  source_type TEXT NOT NULL,       -- 'contract' | 'policy'
+  source_name TEXT NOT NULL,       -- original filename (no path)
+  chunk_index INTEGER NOT NULL,
+  chunk_text  TEXT NOT NULL,
+  embedding   vector(1536),
+  meta_json   JSONB,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (org_id, source_type, source_name, chunk_index)
+);
+
+CREATE INDEX IF NOT EXISTS doc_chunks_embedding_idx
+  ON doc_chunks USING ivfflat (embedding vector_cosine_ops)
+  WITH (lists = 50);
+
 -- === Alerts & auditing ===
 -- Alerts (anomalies, warnings)
 CREATE TABLE IF NOT EXISTS alerts (
@@ -228,6 +249,7 @@ ALTER TABLE invoice_lines     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE vendor_contracts  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE alerts            ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_log         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE doc_chunks        ENABLE ROW LEVEL SECURITY;
 
 -- Basic org containment policies (use app.org_id GUC; safe no-op if not set)
 DO $body$
@@ -313,6 +335,16 @@ BEGIN
     EXECUTE 'CREATE POLICY org_select_audit_log ON audit_log FOR SELECT USING (org_id = current_setting(''app.org_id'', true)::uuid)';
     EXECUTE 'CREATE POLICY org_insert_audit_log ON audit_log FOR INSERT WITH CHECK (org_id = current_setting(''app.org_id'', true)::uuid)';
   END IF;
+
+  -- Doc chunks (vector search)
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'doc_chunks' AND policyname = 'org_select_doc_chunks'
+  ) THEN
+    EXECUTE 'CREATE POLICY org_select_doc_chunks ON doc_chunks FOR SELECT USING (org_id = current_setting(''app.org_id'', true)::uuid)';
+    EXECUTE 'CREATE POLICY org_insert_doc_chunks ON doc_chunks FOR INSERT WITH CHECK (org_id = current_setting(''app.org_id'', true)::uuid)';
+    EXECUTE 'CREATE POLICY org_update_doc_chunks ON doc_chunks FOR UPDATE USING (org_id = current_setting(''app.org_id'', true)::uuid) WITH CHECK (org_id = current_setting(''app.org_id'', true)::uuid)';
+  END IF;
 END;
 $body$;
 
@@ -328,6 +360,7 @@ GRANT USAGE ON SCHEMA public TO app_user;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_user;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_user;
 GRANT SELECT, INSERT, UPDATE, DELETE ON vendor_contracts TO app_user;
+GRANT SELECT, INSERT, UPDATE, DELETE ON doc_chunks TO app_user;
 """
 with psycopg.connect(DATABASE_URL) as conn:
     with conn.cursor() as cur:

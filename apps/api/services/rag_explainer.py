@@ -14,7 +14,7 @@ from .evidence_retrieval import retrieve_evidence
 from .llm_client import generate_explanation, LLMUnavailableError
 
 
-SUPPORTED_TYPES = {"unit_price_delta", "vendor_volume_spike", "duplicate_invoice"}
+SUPPORTED_TYPES = {"unit_price_delta", "vendor_volume_spike", "duplicate_invoice", "excessive_consulting"}
 
 
 # ---------------------------------------------------------------------------
@@ -34,6 +34,34 @@ def _build_prompt(alert: Dict[str, Any], evidence: Dict[str, Any]) -> str:
     alert_type = alert["type"]
     severity = alert.get("severity", "unknown")
     vendor = alert.get("vendor_name") or "Unknown vendor"
+
+    if alert_type == "excessive_consulting":
+        contract_snippets = evidence.get("vector_evidence") or []
+        snippets_text = ""
+        if contract_snippets:
+            snippets_text = "\n".join(
+                f"  [{c['source_type'].upper()} — {c['source_name']}]: {c['snippet']}"
+                for c in contract_snippets
+            )
+        invoice_facts = evidence.get("invoice_facts") or {}
+        lines = [
+            f"Alert type: {alert_type}",
+            f"Severity: {severity}",
+            f"Vendor: {vendor}",
+            f"Alert message: {alert.get('message', '')}",
+            "",
+            "Invoice facts:",
+            json.dumps(invoice_facts, indent=2, default=str),
+            "",
+            "Retrieved contract/policy evidence (from vector search):",
+            snippets_text or "  No relevant contract or policy documents found.",
+            "",
+            "Produce a reviewer-facing explanation in JSON format.",
+            "Include: summary, evidence (list of factual statements citing the contract/policy snippets above), why_it_matters, recommended_action, confidence.",
+            "Do not invent data not present in the evidence above.",
+        ]
+        return "\n".join(lines)
+
     lines = [
         f"Alert type: {alert_type}",
         f"Severity: {severity}",
@@ -143,6 +171,56 @@ def _fallback_duplicate_invoice(alert: Dict[str, Any], evidence: Dict[str, Any])
     }
 
 
+def _fallback_excessive_consulting(alert: Dict[str, Any], evidence: Dict[str, Any]) -> Dict[str, Any]:
+    m = evidence.get("metrics") or {}
+    vendor = alert.get("vendor_name") or "the vendor"
+    facts = evidence.get("invoice_facts") or {}
+    amount = facts.get("consulting_amount") or _fmt(m.get("consulting_total"))
+    contract_rate = m.get("contract_rate_found")
+    invoice_rate = m.get("invoice_rate")
+    vector_ev = evidence.get("vector_evidence") or []
+
+    evidence_items = [f"Total consulting/professional services spend: {amount}."]
+    if contract_rate is not None and invoice_rate is not None:
+        evidence_items.append(
+            f"Invoice hourly rate: ${float(invoice_rate):,.2f}. "
+            f"Contract rate limit: ${float(contract_rate):,.2f}."
+        )
+    for chunk in vector_ev[:2]:
+        source = f"{chunk.get('source_type', 'document')} — {chunk.get('source_name', '')}"
+        snippet = chunk.get("snippet", "")[:200]
+        if snippet:
+            evidence_items.append(f"From {source}: \"{snippet}\"")
+
+    if contract_rate and invoice_rate and float(invoice_rate) > float(contract_rate):
+        summary = (
+            f"Invoice from {vendor} includes consulting charges at "
+            f"${float(invoice_rate):,.2f}/hr, which exceeds the contract rate limit "
+            f"of ${float(contract_rate):,.2f}/hr."
+        )
+        confidence = "high"
+    else:
+        summary = (
+            f"Invoice from {vendor} includes consulting/professional services totalling "
+            f"{amount}, which exceeds the review threshold and warrants approval."
+        )
+        confidence = "medium"
+
+    return {
+        "summary": summary,
+        "evidence": evidence_items,
+        "why_it_matters": (
+            "Unauthorised or excessive consulting spend can indicate policy bypass, "
+            "scope creep, or missing procurement approval."
+        ),
+        "recommended_action": (
+            "Obtain a Statement of Work and written approval from the procurement manager "
+            "before releasing payment. Verify rates against the signed contract."
+        ),
+        "confidence": confidence,
+    }
+
+
 def _generate_fallback(alert: Dict[str, Any], evidence: Dict[str, Any]) -> Dict[str, Any]:
     alert_type = alert.get("type", "")
     if alert_type == "unit_price_delta":
@@ -151,6 +229,8 @@ def _generate_fallback(alert: Dict[str, Any], evidence: Dict[str, Any]) -> Dict[
         return _fallback_vendor_volume_spike(alert, evidence)
     if alert_type == "duplicate_invoice":
         return _fallback_duplicate_invoice(alert, evidence)
+    if alert_type == "excessive_consulting":
+        return _fallback_excessive_consulting(alert, evidence)
     return {
         "summary": alert.get("message") or "An anomaly was detected.",
         "evidence": [],

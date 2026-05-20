@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     REDIS_PASSWORD: str = ""
     SLACK_WEBHOOK_URL: str = ""
     APP_BASE_URL: str = ""
+    OPENAI_API_KEY: str = ""
+    EMBEDDING_MODEL: str = "text-embedding-3-small"
+    EMBEDDING_DIMENSIONS: int = 1536
 
     @property
     def app_db_url(self) -> str:
