@@ -1,9 +1,17 @@
+import logging
+
 import arq
 from psycopg_pool import AsyncConnectionPool
 
 from apps.api.settings import settings as app_settings
 from apps.api.db import pool as sync_pool
 from apps.api.worker.tasks import extract_document, score_invoice_job
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
 
 
 async def startup(ctx: dict) -> None:
