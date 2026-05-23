@@ -43,7 +43,6 @@ TABLES = [
     "vendor_contracts",
     "raw_docs",
     "vendors",
-    "doc_chunks",
 ]
 
 
