@@ -12,7 +12,9 @@ Usage:
     source venv/bin/activate
     python scripts/upload_clean_invoices.py [--dir dataset/generated/invoices_json] \
                                             [--concurrency 20] \
-                                            [--api-url http://localhost:8000]
+                                            [--api-url http://localhost:8000] \
+                                            [--exclude INV-A.json] 
+                                            [--exclude "INV-A.json&INV-B.json"]
 """
 
 import argparse
@@ -123,11 +125,14 @@ async def upload_file(
                 )
 
 
-async def main(invoice_dir: pathlib.Path, api_url: str, concurrency: int) -> None:
-    files = sorted(invoice_dir.glob("INV-*.json"))
+async def main(invoice_dir: pathlib.Path, api_url: str, concurrency: int, exclude: set[str]) -> None:
+    all_files = sorted(invoice_dir.glob("INV-*.json"))
+    files = [f for f in all_files if f.name not in exclude]
     if not files:
         sys.exit(f"[error] No INV-*.json files found in {invoice_dir}")
 
+    if exclude:
+        print(f"Skipping {len(all_files) - len(files)} file(s): {', '.join(sorted(exclude))}")
     print(f"Found {len(files)} clean invoice files in {invoice_dir}")
 
     org_id, user_id = resolve_demo_ids()
@@ -175,6 +180,13 @@ if __name__ == "__main__":
         default=DEFAULT_CONCURRENCY,
         help=f"Max parallel uploads (default: {DEFAULT_CONCURRENCY})",
     )
+    parser.add_argument(
+        "--exclude",
+        default="",
+        metavar="FILENAMES",
+        help="Filenames to skip, separated by & (e.g. INV-A.json&INV-B.json)",
+    )
     args = parser.parse_args()
 
-    asyncio.run(main(args.dir, args.api_url, args.concurrency))
+    exclude = set(args.exclude.split("&")) - {""} if args.exclude else set()
+    asyncio.run(main(args.dir, args.api_url, args.concurrency, exclude))
