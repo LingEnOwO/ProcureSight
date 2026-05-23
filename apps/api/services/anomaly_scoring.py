@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import os
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -11,6 +13,8 @@ from apps.api.repos.invoice_stats import (
     get_vendor_sku_baseline_price,
     get_single_vendor_spend_stats,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # Simple container used by the pipeline to represent alerts that should be
@@ -556,6 +560,9 @@ def _extract_rates_from_text(text: str) -> list:
     return rates
 
 
+_MIN_SIMILARITY = 0.5
+
+
 async def _search_chunks_async(
     db: Any,
     org_id: str,
@@ -563,23 +570,24 @@ async def _search_chunks_async(
     source_types: Optional[List[str]] = None,
     limit: int = 5,
 ) -> List[Dict[str, Any]]:
-    """Async wrapper: embeds the query and queries doc_chunks via the async DB."""
-    import os
+    """Embed query async and return the top matching doc_chunks above a similarity floor."""
+    from openai import AsyncOpenAI
+    from apps.api.settings import settings
+
+    api_key = os.getenv("OPENAI_API_KEY") or settings.OPENAI_API_KEY
+    if not api_key:
+        return []
+
     try:
-        from openai import OpenAI
-        from apps.api.settings import settings
-        api_key = os.getenv("OPENAI_API_KEY") or settings.OPENAI_API_KEY
-        if not api_key:
-            return []
-        client = OpenAI(api_key=api_key)
-        resp = client.embeddings.create(
+        client = AsyncOpenAI(api_key=api_key)
+        resp = await client.embeddings.create(
             model=settings.EMBEDDING_MODEL,
             input=[query],
             dimensions=settings.EMBEDDING_DIMENSIONS,
         )
-        vector = resp.data[0].embedding
-        vector_str = "[" + ",".join(str(v) for v in vector) + "]"
-    except Exception:
+        vector_str = "[" + ",".join(str(v) for v in resp.data[0].embedding) + "]"
+    except Exception as e:
+        logger.warning("_search_chunks_async: embedding query failed: %s", e)
         return []
 
     query_sql = """
@@ -592,14 +600,22 @@ async def _search_chunks_async(
           1 - (embedding <=> %(vec)s::vector) AS similarity
         FROM doc_chunks
         WHERE org_id = %(org_id)s
+          AND embedding IS NOT NULL
           AND (%(types)s::text[] IS NULL OR source_type = ANY(%(types)s::text[]))
+          AND 1 - (embedding <=> %(vec)s::vector) >= %(min_sim)s
         ORDER BY embedding <=> %(vec)s::vector
         LIMIT %(limit)s
     """
     async with db.cursor(row_factory=dict_row) as cur:
         await cur.execute(
             query_sql,
-            {"vec": vector_str, "org_id": org_id, "types": source_types, "limit": limit},
+            {
+                "vec": vector_str,
+                "org_id": org_id,
+                "types": source_types,
+                "limit": limit,
+                "min_sim": _MIN_SIMILARITY,
+            },
         )
         return await cur.fetchall()
 
@@ -651,20 +667,28 @@ async def _score_excessive_consulting_for_invoice(
         db, org_id, query_text, source_types=["contract", "policy"], limit=5
     )
 
-    # Only trust chunks with similarity ≥ 0.75 to avoid spurious rate comparisons
-    # from unrelated contracts that happened to rank in the top-k.
-    high_sim_chunks = [
-        c for c in chunks
-        if c.get("similarity") is not None and float(c["similarity"]) >= 0.75
-    ]
+    logger.info(
+        "excessive_consulting vector search | invoice=%s | chunks_returned=%d",
+        invoice_no or invoice_id,
+        len(chunks),
+    )
+    for i, c in enumerate(chunks):
+        logger.debug(
+            "  chunk[%d] source=%s | similarity=%.3f | text=%r",
+            i,
+            c.get("source_name"),
+            c.get("similarity") or 0.0,
+            c.get("chunk_text", "")[:200],
+        )
 
-    # Extract the maximum allowed hourly rate across all high-similarity chunks.
-    # Using max (not min) because contracts list multiple tiers (e.g. $150 analyst,
-    # $350 senior partner) — we only flag when the invoice rate exceeds the highest
-    # contracted tier, which is the clearest sign of an out-of-contract charge.
+    # Extract the maximum allowed hourly rate from the top-ranked chunk only.
+    # Using the top-1 chunk avoids polluting the rate comparison with lower-ranked
+    # chunks from unrelated contracts. Using max (not min) across tiers within that
+    # chunk means we only flag when the invoice rate exceeds the highest contracted
+    # tier — the clearest sign of an out-of-contract charge.
     contract_rate: Optional[float] = None
-    for chunk in high_sim_chunks:
-        for rate in _extract_rates_from_text(chunk.get("chunk_text", "")):
+    if chunks:
+        for rate in _extract_rates_from_text(chunks[0].get("chunk_text", "")):
             if contract_rate is None or rate > contract_rate:
                 contract_rate = rate
 
@@ -688,14 +712,14 @@ async def _score_excessive_consulting_for_invoice(
                 f"Invoice hourly rate {max_invoice_rate:.2f} exceeds contract rate limit "
                 f"{contract_rate:.2f} found in retrieved contract/policy evidence."
             )
-    elif high_sim_chunks and contract_rate is None and consulting_total > _CONSULTING_TOTAL_MEDIUM_THRESHOLD:
-        # Relevant contracts were found but none specified an hourly rate —
-        # flag for manual review since we can't validate the charges.
+    elif not chunks and consulting_total > _CONSULTING_TOTAL_MEDIUM_THRESHOLD:
+        # No contract or policy evidence found at all — flag for manual review
+        # since we cannot validate whether these charges are authorised.
         severity = "medium"
         reason = (
             f"Consulting total {consulting_total:.2f} exceeds the "
-            f"{_CONSULTING_TOTAL_MEDIUM_THRESHOLD:.0f} review threshold. "
-            "No explicit contract rate limit found in retrieved documents."
+            f"{_CONSULTING_TOTAL_MEDIUM_THRESHOLD:.0f} review threshold and no "
+            "contract or policy evidence was found for this vendor."
         )
 
     if severity is None:
