@@ -10,6 +10,7 @@ from .routes.extract import router as extract_router
 from .routes.alerts import router as alerts_router
 from .routes.alert_explanations import router as alert_explanations_router
 from .routes.jobs import router as jobs_router
+from .routes.score import router as score_router
 from .db import async_pool, pool as sync_pool
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -57,3 +58,4 @@ app.include_router(extract_router)
 app.include_router(alerts_router)
 app.include_router(alert_explanations_router)
 app.include_router(jobs_router)
+app.include_router(score_router)
