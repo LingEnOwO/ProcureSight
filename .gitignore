@@ -23,10 +23,14 @@ coverage/
 Thumbs.db
 .idea/
 .vscode/
+.claude/projects/
 
 # --- data: generated or large ---
 data/samples/**
 !data/samples/README.md
+
+# --- dataset: generated output (large, reproducible) ---
+dataset/generated/
 
 # --- generated api spec ---
 openapi.json

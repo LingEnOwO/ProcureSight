@@ -1,0 +1,99 @@
+VENDOR SERVICES AGREEMENT
+==========================
+
+Contract Number : VSA-SAMPLE-002
+Agreement Date  : 2024-11-05
+Effective Date  : 2024-11-05
+Expiration Date : 2025-10-31
+
+PARTIES
+-------
+Buyer  : ProcureSight Corp.
+         123 Business Ave, Suite 400
+         San Francisco, CA 94105
+         EIN: 47-XXXXXXX
+
+Vendor : Stationery World Inc.
+
+ARTICLE 1 — SCOPE OF SERVICES
+------------------------------
+Vendor agrees to supply the following approved categories of goods and services:
+OFFICE SUPPLIES, CONSUMABLES, AND RELATED EQUIPMENT.
+
+Approved Products and Standard Pricing:
+  - Standard #10 Envelopes (500-pack): $28.50 ± $2.00 per unit
+  - Shipping Labels (100-pack): $16.99 ± $1.00 per unit
+  - Color Printer Ink Set (4-pack): $67.99 ± $4.00 per unit
+  - Spiral Notebooks (12-pack): $24.99 ± $1.50 per unit
+  - Packing Tape Rolls (6-pack): $19.25 ± $1.00 per unit
+  - Heavy-Duty Stapler: $22.49 ± $2.00 per unit
+  - Box of Staples (5000-count): $6.99 ± $0.50 per unit
+  - Whiteboard Cleaner Spray: $9.49 ± $0.50 per unit
+
+Pricing is denominated in USD. Unit prices are valid for the
+term of this agreement and may be adjusted only with 30-day written notice.
+
+ARTICLE 2 — PRICING & DISCOUNTS
+---------------------------------
+Volume Discount: A 5% discount applies to any single order exceeding
+$1,500.00.
+
+Price Escalation: Prices may increase by no more than 3% per calendar year,
+effective upon written notice at least 60 days before the increase takes effect.
+
+ARTICLE 3 — PAYMENT TERMS
+--------------------------
+Payment Terms : Net 30
+Invoice Currency : USD
+Late Payment Penalty : 1.0% per month
+
+All invoices must reference this contract number (VSA-SAMPLE-002) and be
+submitted to: accounts.payable@procuresight.com
+
+ARTICLE 4 — ANNUAL SPENDING LIMIT
+-----------------------------------
+ProcureSight's approved annual spend under this agreement is capped at:
+$15,000.00
+
+Any order that would cause cumulative annual spend to exceed this cap requires
+written approval from the VP of Finance before the order is placed.
+
+ARTICLE 5 — INVOICE REQUIREMENTS
+----------------------------------
+All invoices must contain:
+  (a) Unique invoice number (no duplicate invoice numbers accepted)
+  (b) Vendor name exactly as stated in this agreement
+  (c) ProcureSight purchase order number (where applicable)
+  (d) Itemized line items with SKU, description, quantity, and unit price
+  (e) Invoice date and payment due date
+  (f) Currency and total amount due
+
+Invoices not meeting these requirements will be returned unpaid without penalty
+to ProcureSight for the resulting payment delay.
+
+ARTICLE 6 — RENEWAL & TERMINATION
+------------------------------------
+Renewal : Manual renewal required 60 days before expiry.
+Termination for Convenience : Either party may terminate this agreement with
+  60 days written notice.
+Termination for Cause : Either party may terminate immediately upon material
+  breach if the breach is not cured within 15 days of written notice.
+
+ARTICLE 7 — COMPLIANCE & AUDIT
+--------------------------------
+Vendor agrees to maintain records supporting all invoiced charges for a minimum
+of 7 years. ProcureSight reserves the right to audit Vendor's invoices and
+supporting documentation once per calendar year with 10 business days notice.
+
+ARTICLE 8 — GOVERNING LAW
+---------------------------
+This agreement is governed by the laws of the State of California.
+
+ARTICLE 9 — ENTIRE AGREEMENT
+------------------------------
+This document, together with any attached schedules, constitutes the entire
+agreement between the parties with respect to its subject matter.
+
+________________________________        ________________________________
+Authorized Signatory, ProcureSight      Authorized Signatory, Stationery World Inc.
+Date: ___________________________       Date: ___________________________

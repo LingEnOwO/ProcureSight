@@ -1,4 +1,4 @@
-.PHONY: up down ps logs dbshell seed load-samples openapi types slack-test mailhog
+.PHONY: up down ps logs dbshell seed openapi types slack-test mailhog
 
 up:        ## start db + minio + redis + mailhog and init minio bucket
 	docker compose up -d db minio redis mailhog minio-init
@@ -17,9 +17,6 @@ dbshell:   ## psql into DB from host
 
 seed:      ## create tables/fixtures
 	python scripts/seed.py
-
-load-samples: ## upload samples to S3 + register rows
-	python scripts/load_samples.py data/samples
 
 openapi:   ## dump OpenAPI spec to openapi.json
 	python -m apps.api.generate_openapi

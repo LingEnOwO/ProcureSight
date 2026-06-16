@@ -18,6 +18,8 @@ export interface paths {
          *
          *     `
          *         - Emits a keepalive comment every 15s so proxies don't time out.
+         *         - Events are delivered via Redis pub/sub so ARQ workers can broadcast
+         *           to all connected FastAPI processes.
          */
         get: operations["sse_events_events_get"];
         put?: never;
@@ -28,7 +30,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/ingest": {
+    "/ingest": {
         parameters: {
             query?: never;
             header?: never;
@@ -39,9 +41,9 @@ export interface paths {
         put?: never;
         /**
          * Ingest
-         * @description Ingest file upload. Org context derived from authenticated user's JWT.
+         * @description Ingest file upload. User context from trusted Next.js gateway headers.
          */
-        post: operations["ingest_api_ingest_post"];
+        post: operations["ingest_ingest_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -144,7 +146,13 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Extract Structured */
+        /**
+         * Extract Structured
+         * @description Enqueue an async structured-extraction job (CSV or JSON) for a document
+         *     that has already been uploaded via POST /ingest.
+         *
+         *     Returns a job_id immediately. Poll GET /jobs/{job_id} for status and result.
+         */
         post: operations["extract_structured_extract_structured_post"];
         delete?: never;
         options?: never;
@@ -163,9 +171,10 @@ export interface paths {
         put?: never;
         /**
          * Extract Unstructured
-         * @description Extract an invoice from an unstructured document (e.g., PDF) using
-         *     the unstructured extraction pipeline (PDF -> text -> LLM -> Invoice),
-         *     then run business validation and persist to the database.
+         * @description Enqueue an async unstructured-extraction job (PDF → LLM pipeline) for a
+         *     document that has already been uploaded via POST /ingest.
+         *
+         *     Returns a job_id immediately. Poll GET /jobs/{job_id} for status and result.
          */
         post: operations["extract_unstructured_extract_unstructured_post"];
         delete?: never;
@@ -219,6 +228,56 @@ export interface paths {
         patch: operations["patch_alert_alerts__alert_id__patch"];
         trace?: never;
     };
+    "/alerts/{alert_id}/explain": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Explain Alert Endpoint
+         * @description Generate (or return cached) an evidence-backed explanation for an alert.
+         *
+         *     Supported alert types: unit_price_delta, vendor_volume_spike, duplicate_invoice.
+         *     Pass ?force=true to regenerate an existing explanation.
+         */
+        post: operations["explain_alert_endpoint_alerts__alert_id__explain_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Job Status
+         * @description Poll the status of an ARQ background job.
+         *
+         *     Returns one of: queued | in_progress | complete | not_found | failed
+         *
+         *     When status == "complete" and the job succeeded, the result payload
+         *     (invoice_id, warnings, etc.) is included under the "result" key.
+         *     When status == "complete" but the job raised an exception, the error
+         *     message is included under the "error" key.
+         */
+        get: operations["get_job_status_jobs__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -239,24 +298,8 @@ export interface components {
             /** Acknowledged By */
             acknowledged_by?: string | null;
         };
-        /** Body_extract_structured_extract_structured_post */
-        Body_extract_structured_extract_structured_post: {
-            /**
-             * File
-             * Format: binary
-             */
-            file: string;
-        };
-        /** Body_extract_unstructured_extract_unstructured_post */
-        Body_extract_unstructured_extract_unstructured_post: {
-            /**
-             * File
-             * Format: binary
-             */
-            file: string;
-        };
-        /** Body_ingest_api_ingest_post */
-        Body_ingest_api_ingest_post: {
+        /** Body_ingest_ingest_post */
+        Body_ingest_ingest_post: {
             /**
              * File
              * Format: binary
@@ -400,7 +443,11 @@ export interface operations {
     sse_events_events_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "x-business-user-id"?: string | null;
+                "x-org-id"?: string | null;
+                "x-user-role"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -415,20 +462,31 @@ export interface operations {
                     "application/json": unknown;
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
-    ingest_api_ingest_post: {
+    ingest_ingest_post: {
         parameters: {
             query?: never;
             header?: {
-                cookie?: string | null;
+                "x-business-user-id"?: string | null;
+                "x-org-id"?: string | null;
+                "x-user-role"?: string | null;
             };
             path?: never;
             cookie?: never;
         };
         requestBody: {
             content: {
-                "multipart/form-data": components["schemas"]["Body_ingest_api_ingest_post"];
+                "multipart/form-data": components["schemas"]["Body_ingest_ingest_post"];
             };
         };
         responses: {
@@ -479,7 +537,9 @@ export interface operations {
                 offset?: number;
             };
             header?: {
-                cookie?: string | null;
+                "x-business-user-id"?: string | null;
+                "x-org-id"?: string | null;
+                "x-user-role"?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -510,7 +570,9 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                cookie?: string | null;
+                "x-business-user-id"?: string | null;
+                "x-org-id"?: string | null;
+                "x-user-role"?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -545,7 +607,9 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                cookie?: string | null;
+                "x-business-user-id"?: string | null;
+                "x-org-id"?: string | null;
+                "x-user-role"?: string | null;
             };
             path: {
                 invoice_id: string;
@@ -578,7 +642,9 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                cookie?: string | null;
+                "x-business-user-id"?: string | null;
+                "x-org-id"?: string | null;
+                "x-user-role"?: string | null;
             };
             path: {
                 invoice_id: string;
@@ -618,7 +684,9 @@ export interface operations {
                 offset?: number;
             };
             header?: {
-                cookie?: string | null;
+                "x-business-user-id"?: string | null;
+                "x-org-id"?: string | null;
+                "x-user-role"?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -649,7 +717,9 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                cookie?: string | null;
+                "x-business-user-id"?: string | null;
+                "x-org-id"?: string | null;
+                "x-user-role"?: string | null;
             };
             path: {
                 vendor_id: string;
@@ -684,19 +754,17 @@ export interface operations {
                 raw_doc_id?: number | null;
             };
             header?: {
-                cookie?: string | null;
+                "x-business-user-id"?: string | null;
+                "x-org-id"?: string | null;
+                "x-user-role"?: string | null;
             };
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "multipart/form-data": components["schemas"]["Body_extract_structured_extract_structured_post"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -718,22 +786,20 @@ export interface operations {
     extract_unstructured_extract_unstructured_post: {
         parameters: {
             query?: {
-                raw_doc_id?: string | null;
+                raw_doc_id?: number | null;
             };
             header?: {
-                cookie?: string | null;
+                "x-business-user-id"?: string | null;
+                "x-org-id"?: string | null;
+                "x-user-role"?: string | null;
             };
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "multipart/form-data": components["schemas"]["Body_extract_unstructured_extract_unstructured_post"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -765,7 +831,9 @@ export interface operations {
                 offset?: number;
             };
             header?: {
-                cookie?: string | null;
+                "x-business-user-id"?: string | null;
+                "x-org-id"?: string | null;
+                "x-user-role"?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -796,7 +864,9 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                cookie?: string | null;
+                "x-business-user-id"?: string | null;
+                "x-org-id"?: string | null;
+                "x-user-role"?: string | null;
             };
             path: {
                 alert_id: string;
@@ -816,6 +886,79 @@ export interface operations {
                 };
                 content: {
                     "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    explain_alert_endpoint_alerts__alert_id__explain_post: {
+        parameters: {
+            query?: {
+                /** @description Regenerate even if a cached explanation exists */
+                force?: boolean;
+            };
+            header?: {
+                "x-business-user-id"?: string | null;
+                "x-org-id"?: string | null;
+                "x-user-role"?: string | null;
+            };
+            path: {
+                alert_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_job_status_jobs__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-business-user-id"?: string | null;
+                "x-org-id"?: string | null;
+                "x-user-role"?: string | null;
+            };
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

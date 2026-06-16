@@ -1,8 +1,17 @@
+import logging
+
 import arq
 from psycopg_pool import AsyncConnectionPool
 
 from apps.api.settings import settings as app_settings
+from apps.api.db import pool as sync_pool
 from apps.api.worker.tasks import extract_document, score_invoice_job
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
 
 
 async def startup(ctx: dict) -> None:
@@ -13,11 +22,13 @@ async def startup(ctx: dict) -> None:
         open=False,
     )
     await ctx["db_pool"].open()
+    sync_pool.open()
     # ArqRedis subclasses redis.asyncio.Redis, so it doubles as a pub/sub client
     ctx["arq_pool"] = await arq.create_pool(app_settings.redis_settings)
 
 
 async def shutdown(ctx: dict) -> None:
+    sync_pool.close()
     await ctx["db_pool"].close()
     await ctx["arq_pool"].aclose()
 

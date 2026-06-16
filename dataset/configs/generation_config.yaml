@@ -1,0 +1,99 @@
+# -----------------------------------------------------------------------------
+# generation_config.yaml
+#
+# PURPOSE
+# -------
+# This file documents the intended configuration for the ProcureSight synthetic
+# dataset generators. It serves as a single source of truth for all tunable
+# parameters — seed, invoice volume, anomaly count, PDF behavior, etc.
+#
+# CURRENT STATUS: NOT WIRED UP
+# -----------------------------
+# The generators (generate_dataset.py, inject_anomalies.py, generate_contracts.py)
+# currently hardcode these values as Python constants at the top of each file.
+# This YAML is reference documentation only — changing values here has no effect
+# on generation until the wire-up below is implemented.
+#
+# HOW TO WIRE IT UP
+# ------------------
+# 1. Add a config loader to utils.py:
+#
+#      import yaml
+#      from pathlib import Path
+#
+#      def load_config(path: Path = None) -> dict:
+#          if path is None:
+#              path = Path(__file__).parents[1] / "configs/generation_config.yaml"
+#          return yaml.safe_load(path.read_text())
+#
+# 2. In each generator, replace hardcoded constants with config lookups:
+#
+#      cfg = load_config()
+#      SEED          = cfg["generation"]["seed"]
+#      HISTORY_MONTHS = cfg["generation"]["history_months"]
+#      ANOMALY_MIN   = cfg["anomalies"]["count_min"]
+#      # ...etc.
+#
+# 3. Optionally accept a --config flag in run_all.py so you can swap configs:
+#
+#      python dataset/generators/run_all.py --config configs/generation_config_small.yaml
+#
+# WHY BOTHER
+# ----------
+# Once wired up, you can maintain multiple config variants without touching Python:
+#   - generation_config.yaml          → full 2k–5k invoice benchmark set
+#   - generation_config_dev.yaml      → small fast set (200 invoices, no PDFs)
+#   - generation_config_stress.yaml   → 50k invoices for load testing
+# -----------------------------------------------------------------------------
+
+generation:
+  seed: 42
+  history_months: 18
+  invoice_count_min: 2000
+  invoice_count_max: 5000
+  lines_per_invoice_min: 5
+  lines_per_invoice_max: 20
+
+vendors:
+  count_min: 30
+  count_max: 50
+
+anomalies:
+  count_min: 50
+  count_max: 100
+
+currencies:
+  primary: USD
+  secondary:
+    - EUR
+    - JPY
+  secondary_probability: 0.08  # 8% of invoices use non-USD currency
+
+tax_rates:
+  USD: 0.08
+  EUR: 0.19
+  JPY: 0.10
+
+output:
+  json_dir: dataset/generated/invoices_json
+  csv_dir: dataset/generated/invoices_csv
+  pdf_dir: dataset/generated/invoices_pdf
+  contracts_dir: dataset/generated/contracts
+  policies_dir: dataset/generated/policies
+  anomalies_file: dataset/generated/anomalies.json
+
+pdf:
+  templates:
+    - standard
+    - modern
+    - compact
+    - scanned
+  scanned_probability: 0.12   # 12% of PDFs get OCR-noise treatment
+  multipage_threshold: 10     # invoices with >10 lines become multi-page
+
+sample:
+  json_count: 5
+  csv_count: 3
+  pdf_count: 4
+  contracts_count: 3
+  policies_count: 2

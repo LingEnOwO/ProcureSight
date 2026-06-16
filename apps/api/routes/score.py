@@ -27,6 +27,16 @@ async def debug_score_invoice(
       - After adjusting scoring thresholds or feature views.
       - After backfilling historical data.
       - When investigating why a particular invoice was or was not flagged.
+
+    Test with curl (get IDs from the DB — see queries below):
+      curl -s -X POST http://localhost:8000/score/invoice/<invoice_id> \
+        -H "X-Org-Id: <org_id>" \
+        -H "X-Business-User-Id: <user_id>" \
+        -H "X-User-Role: admin" | jq
+
+    Lookup queries:
+      SELECT id, org_id FROM invoices LIMIT 10;
+      SELECT id FROM users WHERE email = 'uploader@demo.local';
     """
     async with async_pool.connection() as aconn:
         await aconn.execute("SELECT set_config('app.org_id', %s, true)", (str(user_ctx.org_id),))
