@@ -1,4 +1,5 @@
 import logging
+import os
 
 import arq
 from psycopg_pool import AsyncConnectionPool
@@ -18,7 +19,7 @@ async def startup(ctx: dict) -> None:
     ctx["db_pool"] = AsyncConnectionPool(
         conninfo=app_settings.app_db_url,
         min_size=2,
-        max_size=10,
+        max_size=int(os.getenv("ARQ_DB_POOL_MAX_SIZE", "10")),
         open=False,
     )
     await ctx["db_pool"].open()
@@ -38,6 +39,6 @@ class WorkerSettings:
     on_startup = startup
     on_shutdown = shutdown
     redis_settings = app_settings.redis_settings
-    max_jobs = 10
+    max_jobs = int(os.getenv("ARQ_MAX_JOBS", "10"))
     job_timeout = 300   # 5-minute hard cap per job
     keep_result = 3600  # results readable for 1 hour via GET /jobs/{job_id}
