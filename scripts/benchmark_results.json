@@ -1,0 +1,83 @@
+{
+  "baseline": [
+    {
+      "elapsed": 132.1172320828773,
+      "invoices": 2349,
+      "alerts": 7
+    },
+    {
+      "elapsed": 131.62618770892732,
+      "invoices": 2349,
+      "alerts": 7
+    },
+    {
+      "elapsed": 131.8415250829421,
+      "invoices": 2349,
+      "alerts": 7
+    },
+    {
+      "elapsed": 131.85210799984634,
+      "invoices": 2349,
+      "alerts": 7
+    },
+    {
+      "elapsed": 133.8752762079239,
+      "invoices": 2349,
+      "alerts": 7
+    }
+  ],
+  "scaled": [
+    {
+      "elapsed": 40.15501658292487,
+      "invoices": 2349,
+      "alerts": 7
+    },
+    {
+      "elapsed": 49.9245720829349,
+      "invoices": 2349,
+      "alerts": 7
+    },
+    {
+      "elapsed": 66.94087083404884,
+      "invoices": 2349,
+      "alerts": 7
+    },
+    {
+      "elapsed": 61.41199433314614,
+      "invoices": 2349,
+      "alerts": 7
+    },
+    {
+      "elapsed": 58.048062124988064,
+      "invoices": 2349,
+      "alerts": 7
+    }
+  ],
+  "wide": [
+    {
+      "elapsed": 50.39984287507832,
+      "invoices": 2349,
+      "alerts": 7
+    },
+    {
+      "elapsed": 69.27562700002454,
+      "invoices": 2349,
+      "alerts": 7
+    },
+    {
+      "elapsed": 70.22031045798212,
+      "invoices": 2349,
+      "alerts": 7
+    },
+    {
+      "elapsed": 68.18919912492856,
+      "invoices": 2349,
+      "alerts": 7
+    },
+    {
+      "elapsed": 66.68242924986407,
+      "invoices": 2349,
+      "alerts": 7
+    }
+  ]
+}
