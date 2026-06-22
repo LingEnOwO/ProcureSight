@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Body, HTTPException, Query, Depends
+from psycopg import Connection
 from ..auth import get_user_context, UserContext
-from ..db import pool
+from ..deps import org_conn
 from typing import Optional, List
 from pydantic import BaseModel
 from ..repos.invoices import (
@@ -34,13 +35,9 @@ class InvoicePatch(BaseModel):
 def list_invoices(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    user_ctx: UserContext = Depends(get_user_context)
+    conn: Connection = Depends(org_conn),
 ):
-    with pool.connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT set_config('app.org_id', %s, true)", (user_ctx.org_id,))
-            cur.execute("SELECT set_config('app.actor_id', %s, true)", (user_ctx.business_user_id,))
-        items = repo_list_invoices(conn, limit=limit, offset=offset)
+    items = repo_list_invoices(conn, limit=limit, offset=offset)
     return {"items": items, "limit": limit, "offset": offset}
 
 
@@ -48,13 +45,9 @@ def list_invoices(
 @router.get("/{invoice_id}")
 def get_invoice(
     invoice_id: str,
-    user_ctx: UserContext = Depends(get_user_context)
+    conn: Connection = Depends(org_conn),
 ):
-    with pool.connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT set_config('app.org_id', %s, true)", (user_ctx.org_id,))
-            cur.execute("SELECT set_config('app.actor_id', %s, true)", (user_ctx.business_user_id,))
-        inv = get_invoice_with_lines(conn, invoice_id)
+    inv = get_invoice_with_lines(conn, invoice_id)
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
     return inv
@@ -65,35 +58,28 @@ def get_invoice(
 def patch_invoice(
     invoice_id: str,
     patch: InvoicePatch = Body(...),
-    user_ctx: UserContext = Depends(get_user_context)
+    conn: Connection = Depends(org_conn),
 ):
-    with pool.connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT set_config('app.org_id', %s, true)", (user_ctx.org_id,))
-            cur.execute("SELECT set_config('app.actor_id', %s, true)", (user_ctx.business_user_id,))
-        fields = {k: v for k, v in patch.model_dump(exclude_none=True).items() if k != "lines"}
-        ok = update_invoice_fields(conn, invoice_id, fields)
-        if not ok:
-            raise HTTPException(status_code=404, detail="Invoice not found")
-        if patch.lines is not None:
-            replace_lines(conn, invoice_id, [ln.model_dump() for ln in patch.lines])
+    fields = {k: v for k, v in patch.model_dump(exclude_none=True).items() if k != "lines"}
+    ok = update_invoice_fields(conn, invoice_id, fields)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if patch.lines is not None:
+        replace_lines(conn, invoice_id, [ln.model_dump() for ln in patch.lines])
     return {"ok": True, "invoice_id": invoice_id}
 
 
 @router.post("", response_model=Invoice)
 def create_invoices(
     inv: Invoice = Body(...),
-    user_ctx: UserContext = Depends(get_user_context)
+    conn: Connection = Depends(org_conn),
+    user_ctx: UserContext = Depends(get_user_context),
 ):
     try:
-        with pool.connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT set_config('app.org_id', %s, true)", (user_ctx.org_id,))
-                cur.execute("SELECT set_config('app.actor_id', %s, true)", (user_ctx.business_user_id,))
-            vendor_name = getattr(inv, "vendor", None) or "Unknown Vendor"
-            vendor_id = ensure_vendor(conn, user_ctx.org_id, vendor_name)
-            invoice_id = upsert_invoice(conn, user_ctx.org_id, vendor_id, inv.dict(), raw_doc_id=None)
-            replace_lines(conn, invoice_id, [ln.dict() for ln in inv.lines])
+        vendor_name = getattr(inv, "vendor", None) or "Unknown Vendor"
+        vendor_id = ensure_vendor(conn, user_ctx.org_id, vendor_name)
+        invoice_id = upsert_invoice(conn, user_ctx.org_id, vendor_id, inv.dict(), raw_doc_id=None)
+        replace_lines(conn, invoice_id, [ln.dict() for ln in inv.lines])
         return inv.model_copy(update={"id": invoice_id})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
