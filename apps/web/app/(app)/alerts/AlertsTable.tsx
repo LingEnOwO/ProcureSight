@@ -1,43 +1,36 @@
 "use client";
 
 import { useState } from "react";
-import { SeverityBadge, StatusBadge } from "./_badges";
+import { pickString, type UnknownRecord } from "@/lib/dataHelpers";
+import { SeverityBadge, AlertStatusBadge } from "@/components/badges";
+import { EmptyState } from "@/components/EmptyState";
 import AlertDetailDrawer from "./AlertDetailDrawer";
 
-type UnknownRecord = Record<string, unknown>;
-
 function pickIdLike(obj: UnknownRecord): string {
-  const v = obj.id ?? obj.alert_id ?? obj.uuid;
-  return typeof v === "string" ? v : typeof v === "number" ? String(v) : "";
+  return pickString(obj, ["id", "alert_id", "uuid"], { numberToString: true });
 }
 
 function pickAlertType(obj: UnknownRecord): string {
-  const v = obj.alert_type ?? obj.type ?? obj.rule_name;
-  return typeof v === "string" ? v : "—";
+  return pickString(obj, ["alert_type", "type", "rule_name"], { fallback: "—" });
 }
 
 function pickSeverity(obj: UnknownRecord): string {
-  const v = obj.severity;
-  return typeof v === "string" ? v : "—";
+  return pickString(obj, ["severity"], { fallback: "—" });
 }
 
 function pickStatus(obj: UnknownRecord): string {
-  const v = obj.status;
-  return typeof v === "string" ? v : "—";
+  return pickString(obj, ["status"], { fallback: "—" });
 }
 
 function pickCreatedAt(obj: UnknownRecord): string {
-  const v = obj.created_at ?? obj.createdAt ?? obj.timestamp;
-  return typeof v === "string" ? v : "—";
+  return pickString(obj, ["created_at", "createdAt", "timestamp"], { fallback: "—" });
 }
 
 function pickInvoiceRef(obj: UnknownRecord): string {
-  const v = obj.invoice_id ?? obj.invoiceId ?? obj.invoice_no;
-  return typeof v === "string"
-    ? v
-    : typeof v === "number"
-      ? String(v)
-      : "—";
+  return pickString(obj, ["invoice_id", "invoiceId", "invoice_no"], {
+    numberToString: true,
+    fallback: "—",
+  });
 }
 
 interface AlertsTableProps {
@@ -49,30 +42,26 @@ export default function AlertsTable({ alerts }: AlertsTableProps) {
 
   if (alerts.length === 0) {
     return (
-      <div className="table-wrapper">
-        <div className="empty-state">
-          <div className="empty-icon">
-            <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
-              <path
-                d="M11 2C8 2 5 4.5 5 8v4L3 14h16l-2-2V8c0-3.5-3-6-6-6z"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinejoin="round"
-              />
-              <path
-                d="M8.5 17a2.5 2.5 0 005 0"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-              />
-            </svg>
-          </div>
-          <div className="empty-title">No alerts</div>
-          <p className="empty-desc">
-            Once the anomaly detection pipeline runs, alerts will appear here.
-          </p>
-        </div>
-      </div>
+      <EmptyState
+        icon={
+          <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+            <path
+              d="M11 2C8 2 5 4.5 5 8v4L3 14h16l-2-2V8c0-3.5-3-6-6-6z"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M8.5 17a2.5 2.5 0 005 0"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+            />
+          </svg>
+        }
+        title="No alerts"
+        description="Once the anomaly detection pipeline runs, alerts will appear here."
+      />
     );
   }
 
@@ -116,7 +105,7 @@ export default function AlertsTable({ alerts }: AlertsTableProps) {
                     <SeverityBadge severity={severity} />
                   </td>
                   <td>
-                    <StatusBadge status={status} />
+                    <AlertStatusBadge status={status} />
                   </td>
                   <td
                     style={{

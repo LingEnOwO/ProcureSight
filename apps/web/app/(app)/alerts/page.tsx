@@ -1,27 +1,14 @@
 import { serverFetch } from "@/lib/serverApiClient";
+import { asObject, extractItems } from "@/lib/dataHelpers";
 import AlertsTable from "./AlertsTable";
 
 export const dynamic = "force-dynamic";
-
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function asObject(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
-}
 
 export default async function Page() {
   const response = await serverFetch("/alerts/");
   const data = await response.json();
 
-  const raw = data as unknown;
-  const items =
-    asArray(asObject(raw).items).length > 0
-      ? asArray(asObject(raw).items)
-      : asArray(raw);
-
-  const alerts = items.map(asObject);
+  const alerts = extractItems(data).map(asObject);
 
   return (
     <div>
