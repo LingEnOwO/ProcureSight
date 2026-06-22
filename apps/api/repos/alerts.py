@@ -1,6 +1,7 @@
 import json
 from typing import Iterable, Any, Dict, List, Optional
 from psycopg import Connection
+from psycopg.rows import dict_row
 
 from apps.api.services.anomaly_scoring import AlertCandidate
 
@@ -103,12 +104,9 @@ def list_alerts_for_org(
     query += " ORDER BY created_at DESC LIMIT %s OFFSET %s"
     params.extend([limit, offset])
 
-    with conn.cursor() as cur:
+    with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(query, params)
-        rows = cur.fetchall()
-        columns = [col[0] for col in cur.description]
-
-    return [dict(zip(columns, row)) for row in rows]
+        return cur.fetchall()
 
 
 def update_alert_status(
@@ -166,11 +164,6 @@ def update_alert_status(
         alert_id,
     ]
 
-    with conn.cursor() as cur:
+    with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(query, params)
-        row = cur.fetchone()
-        if row is None:
-            return None
-        columns = [col[0] for col in cur.description]
-
-    return dict(zip(columns, row))
+        return cur.fetchone()

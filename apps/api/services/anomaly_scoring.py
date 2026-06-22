@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -574,7 +573,7 @@ async def _search_chunks_async(
     from openai import AsyncOpenAI
     from apps.api.settings import settings
 
-    api_key = os.getenv("OPENAI_API_KEY") or settings.OPENAI_API_KEY
+    api_key = settings.openai_api_key
     if not api_key:
         return []
 

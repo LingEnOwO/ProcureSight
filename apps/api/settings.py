@@ -1,3 +1,5 @@
+import os
+
 from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
 from pathlib import Path
@@ -21,11 +23,28 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     EMBEDDING_MODEL: str = "text-embedding-3-small"
     EMBEDDING_DIMENSIONS: int = 1536
+    # ARQ worker tuning (previously read via scattered os.getenv calls).
+    ARQ_DB_POOL_MAX_SIZE: int = 10
+    ARQ_MAX_JOBS: int = 10
 
     @property
     def app_db_url(self) -> str:
         """Return DATABASE_APP_URL if set, else fall back to DATABASE_URL."""
         return self.DATABASE_APP_URL or self.DATABASE_URL
+
+    @property
+    def openai_api_key(self) -> str:
+        """OpenAI key, read at call time (so tests can toggle the env var),
+        falling back to the value loaded from .env.local.
+
+        NOTE: only the *fallback-style* callers (embeddings, anomaly scoring's
+        vector search) use this. ``llm_client`` and ``unstructured_extract``
+        deliberately read ``os.getenv`` directly and raise when it is absent —
+        that raise-on-missing behavior is what lets alert explanations and PDF
+        extraction degrade to deterministic fallbacks. Unifying the two
+        semantics is a behavior change, intentionally left out of this cleanup.
+        """
+        return os.getenv("OPENAI_API_KEY") or self.OPENAI_API_KEY
 
     @property
     def redis_settings(self):

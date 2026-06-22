@@ -22,7 +22,12 @@ def ensure_vendor(conn: Connection, org_id: str, name: str) -> str:
             "SELECT id FROM vendors WHERE org_id = %(org_id)s AND name = %(name)s",
             params,
         )
-        return cur.fetchone()[0]
+        existing = cur.fetchone()
+        if existing is None:
+            raise RuntimeError(
+                f"ensure_vendor: vendor not found after upsert (org_id={org_id!r}, name={name!r})"
+            )
+        return existing[0]
 
 def find_invoice_by_key(
     conn: Connection, org_id: str, vendor_id: str, invoice_no: str
@@ -118,7 +123,7 @@ def replace_lines(conn: Connection, invoice_id: str, lines: list[dict]) -> None:
 # Lists invoices for the current org context with pagination.
 # LIMIT = page size; OFFSET = start index
 def list_invoices(conn: Connection, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
-    with conn.cursor() as cur:
+    with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """
             SELECT id, vendor_id, invoice_no, invoice_date, due_date, currency, subtotal, tax, total, status
@@ -128,13 +133,12 @@ def list_invoices(conn: Connection, limit: int = 50, offset: int = 0) -> List[Di
             """,
             (limit, offset),
         )
-        columns = [col[0] for col in cur.description] # DB metadata
-        return [dict(zip(columns, row)) for row in cur.fetchall()]
+        return cur.fetchall()
 
 
 # Fetches a single invoice and its line items. Returns None if not found.
 def get_invoice_with_lines(conn: Connection, invoice_id: str) -> Optional[Dict[str, Any]]:
-    with conn.cursor() as cur:
+    with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """
             SELECT id, vendor_id, invoice_no, invoice_date, due_date, currency, subtotal, tax, total, status
@@ -142,11 +146,9 @@ def get_invoice_with_lines(conn: Connection, invoice_id: str) -> Optional[Dict[s
             """,
             (invoice_id,),
         )
-        row = cur.fetchone()
-        if not row:
+        inv = cur.fetchone()
+        if not inv:
             return None
-        columns = [c[0] for c in cur.description]
-        inv = dict(zip(columns, row))
 
         cur.execute(
             """
@@ -155,8 +157,7 @@ def get_invoice_with_lines(conn: Connection, invoice_id: str) -> Optional[Dict[s
             """,
             (invoice_id,),
         )
-        line_cols = [c[0] for c in cur.description]
-        inv["lines"] = [dict(zip(line_cols, r)) for r in cur.fetchall()]
+        inv["lines"] = cur.fetchall()
         return inv
 
 

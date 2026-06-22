@@ -4,7 +4,7 @@ ARQ background tasks for ProcureSight.
 Two jobs:
   extract_document  — fetch from S3, run extraction pipeline, persist invoice,
                       then enqueue score_invoice_job.
-  score_invoice_job — run 3 anomaly-scoring rules, persist alerts, send Slack
+  score_invoice_job — run the anomaly-scoring rules, persist alerts, send Slack
                       notification, publish SSE event via Redis pub/sub.
 """
 from __future__ import annotations
