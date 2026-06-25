@@ -9,8 +9,7 @@ project_root = Path(__file__).parent.parent.parent
 load_dotenv(project_root / ".env.local")
 
 class Settings(BaseSettings):
-    DATABASE_URL: str          # Superuser URL — for migrations/seeding only
-    DATABASE_APP_URL: str = "" # Non-superuser URL — used by FastAPI so RLS is enforced
+    DATABASE_APP_URL: str  # Non-superuser URL — RLS is enforced on every request
     S3_ENDPOINT: str
     S3_ACCESS_KEY: str
     S3_SECRET_KEY: str
@@ -26,11 +25,6 @@ class Settings(BaseSettings):
     # ARQ worker tuning (previously read via scattered os.getenv calls).
     ARQ_DB_POOL_MAX_SIZE: int = 10
     ARQ_MAX_JOBS: int = 10
-
-    @property
-    def app_db_url(self) -> str:
-        """Return DATABASE_APP_URL if set, else fall back to DATABASE_URL."""
-        return self.DATABASE_APP_URL or self.DATABASE_URL
 
     @property
     def openai_api_key(self) -> str:

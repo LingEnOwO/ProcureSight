@@ -11,8 +11,8 @@ WHY THESE TESTS CONNECT AS ``app_user`` AND NOT ``procure``
 RLS on the ProcureSight tables is ENABLED but not FORCED, and the seed user
 ``procure`` is a *superuser* — superusers bypass RLS entirely. The application
 deliberately connects to Postgres as the non-superuser ``app_user`` so policies
-are enforced (see ``DATABASE_APP_URL`` / ``settings.app_db_url`` and the role
-setup in ``scripts/seed.py``). Testing isolation therefore *requires* the
+are enforced (see ``settings.DATABASE_APP_URL`` and the role setup in
+``scripts/seed.py``). Testing isolation therefore *requires* the
 non-superuser connection — running these assertions as ``procure`` would
 silently pass even if every policy were dropped.
 

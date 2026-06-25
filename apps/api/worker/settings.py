@@ -16,7 +16,7 @@ logging.basicConfig(
 
 async def startup(ctx: dict) -> None:
     ctx["db_pool"] = AsyncConnectionPool(
-        conninfo=app_settings.app_db_url,
+        conninfo=app_settings.DATABASE_APP_URL,
         min_size=2,
         max_size=app_settings.ARQ_DB_POOL_MAX_SIZE,
         open=False,

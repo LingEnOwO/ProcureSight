@@ -10,7 +10,7 @@ opens the real psycopg pools, ARQ pool and Redis client) and lock down:
   * invoices read/update, alerts list/filter/status, jobs polling, and
     ingest SHA-256 de-duplication.
 
-The app's DB pool connects as the non-superuser ``app_user`` (settings.app_db_url),
+The app's DB pool connects as the non-superuser ``app_user`` (settings.DATABASE_APP_URL),
 so RLS is enforced end-to-end here. Test data is seeded/committed with the
 superuser connection and removed in teardown (DELETE FROM orgs ... CASCADE).
 
