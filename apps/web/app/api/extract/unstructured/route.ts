@@ -1,51 +1,24 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/authOptions';
+import { NextResponse } from 'next/server';
+import { backendBaseUrl, trustedHeaders, withGateway } from '@/lib/gateway';
 
 /**
- * Gateway route handler for /api/extract/unstructured
+ * Gateway route handler for /api/extract/unstructured.
  */
-export async function POST(request: NextRequest) {
-  const session = await getServerSession(authOptions);
-
-  if (!session) {
-    return NextResponse.json({ detail: 'Authentication required' }, { status: 401 });
-  }
-
-  const user = session.user as any;
-  const businessUserId = user?.businessUserId;
-  const orgId = user?.orgId;
-  const role = user?.role;
-
-  if (!businessUserId || !orgId) {
-    return NextResponse.json({ detail: 'Session missing user context' }, { status: 401 });
-  }
-
+export const POST = withGateway(async (request, gateway) => {
   const rawDocId = request.nextUrl.searchParams.get('raw_doc_id');
   if (!rawDocId) {
     return NextResponse.json({ detail: 'raw_doc_id is required' }, { status: 400 });
   }
 
   try {
-    const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-
-    const response = await fetch(`${backendUrl}/extract/unstructured?raw_doc_id=${rawDocId}`, {
-      method: 'POST',
-      headers: {
-        'X-Business-User-Id': businessUserId,
-        'X-Org-Id': orgId,
-        'X-User-Role': role || 'user',
-      },
-    });
-
+    const response = await fetch(
+      `${backendBaseUrl()}/extract/unstructured?raw_doc_id=${rawDocId}`,
+      { method: 'POST', headers: trustedHeaders(gateway) },
+    );
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
-
   } catch (error: any) {
     console.error('Extract unstructured proxy error:', error);
-    return NextResponse.json(
-      { detail: `Extract failed: ${error.message}` },
-      { status: 500 }
-    );
+    return NextResponse.json({ detail: `Extract failed: ${error.message}` }, { status: 500 });
   }
-}
+});
