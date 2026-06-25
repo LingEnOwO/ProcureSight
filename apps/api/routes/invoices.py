@@ -6,12 +6,12 @@ from typing import Optional, List
 from pydantic import BaseModel
 from ..repos.invoices import (
     ensure_vendor,
-    upsert_invoice,
     replace_lines,
     list_invoices as repo_list_invoices,
     get_invoice_with_lines,
     update_invoice_fields,
 )
+from ..services.invoice_persistence import persist_invoice
 from ..models.invoice import Invoice, InvoiceLine
 
 router = APIRouter(prefix="/invoices", tags=["invoices"])
@@ -78,8 +78,14 @@ def create_invoices(
     try:
         vendor_name = getattr(inv, "vendor", None) or "Unknown Vendor"
         vendor_id = ensure_vendor(conn, user_ctx.org_id, vendor_name)
-        invoice_id = upsert_invoice(conn, user_ctx.org_id, vendor_id, inv.dict(), raw_doc_id=None)
-        replace_lines(conn, invoice_id, [ln.dict() for ln in inv.lines])
+        invoice_id = persist_invoice(
+            conn,
+            org_id=user_ctx.org_id,
+            vendor_id=vendor_id,
+            invoice=inv,
+            raw_doc_id=None,
+            upsert=True,
+        )
         return inv.model_copy(update={"id": invoice_id})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

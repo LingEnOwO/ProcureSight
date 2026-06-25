@@ -198,6 +198,24 @@ def test_patch_invoice_updates_field(client, seeded):
     assert "EUR" in g.text
 
 
+def test_create_invoice_persists(client, seeded):
+    """POST /invoices writes vendor + invoice + lines (persist_invoice path)."""
+    body = {
+        "vendor": "Created Vendor",
+        "invoice_no": "RT-CREATE-1",
+        "invoice_date": "2024-07-01",
+        "currency": "USD",
+        "subtotal": 50,
+        "tax": 0,
+        "total": 50,
+        "lines": [{"sku": "S", "desc": "Item", "qty": 1, "unit_price": 50, "line_total": 50}],
+    }
+    r = client.post("/invoices", json=body, headers=_headers(seeded["org_a"]))
+    assert r.status_code == 200, r.text
+    listing = client.get("/invoices", headers=_headers(seeded["org_a"]))
+    assert "RT-CREATE-1" in listing.text
+
+
 # ===========================================================================
 # Alerts
 # ===========================================================================
