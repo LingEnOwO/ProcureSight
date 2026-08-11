@@ -173,50 +173,6 @@ async def _score_unit_price_deltas_for_invoice(
     return candidates
 
 
-async def _find_potential_duplicate_invoices(
-    db: Any,
-    *,
-    org_id: str,
-    vendor_id: str,
-    invoice_id: str,
-    invoice_no: Optional[str],
-) -> List[Dict[str, Any]]:
-    if invoice_no is None:
-        return []
-
-    base_conditions = [
-        "org_id = %(org_id)s",
-        "vendor_id = %(vendor_id)s",
-        "id <> %(invoice_id)s",
-    ]
-    values: Dict[str, Any] = {
-        "org_id": org_id,
-        "vendor_id": vendor_id,
-        "invoice_id": invoice_id,
-    }
-
-    if invoice_no is None:
-        return []
-
-    values["invoice_no"] = invoice_no
-    where_clause = " AND ".join(base_conditions)
-    where_clause += " AND invoice_no = %(invoice_no)s"
-
-    query = f"""
-        SELECT
-          id,
-          vendor_id,
-          invoice_no,
-          total,
-          invoice_date
-        FROM invoices
-        WHERE {where_clause};
-    """
-    async with db.cursor(row_factory=dict_row) as cur:
-        await cur.execute(query, values)
-        return await cur.fetchall()
-
-
 async def _score_vendor_volume_spikes_for_invoice(
     db: Any,
     *,
@@ -314,94 +270,55 @@ async def _score_vendor_volume_spikes_for_invoice(
     ]
 
 
-async def _score_duplicate_invoices_for_invoice(
-    db: Any,
+def build_duplicate_alert(
     *,
     org_id: str,
-    invoice_id: str,
-) -> List[AlertCandidate]:
-    """
-    Rule: detect potential duplicate invoices for the same vendor.
+    vendor_id: str,
+    existing: Dict[str, Any],
+    incoming_invoice_no: str,
+    incoming_vendor: str,
+    incoming_total: float,
+    incoming_raw_doc_id: int,
+) -> AlertCandidate:
+    """Build the alert for a re-submitted invoice that duplicates an existing one.
+
+    Duplicates are caught in the worker *before* insert (via
+    ``find_invoice_by_key``), so the duplicate row is never written and there is
+    nothing to "score" post-hoc. This function owns the alert's shape and
+    severity so that — like every other alert type — that decision lives in the
+    scoring domain rather than in the worker's orchestration code.
 
     Severity:
-      critical — duplicate matches both invoice_no AND total
-      medium   — duplicate matches only invoice_no or only total
+      critical — the existing invoice's total also matches (near-certain duplicate)
+      high     — same vendor + invoice_no but a different total (possibly a
+                 corrected re-upload; still worth a human look)
     """
-    rows = await _fetch_invoice_lines(db, org_id=org_id, invoice_id=invoice_id)
-    if not rows:
-        return []
+    existing_invoice_id = str(existing["id"])
+    matched = ["vendor_id", "invoice_no"]
+    existing_total = existing.get("total")
+    if existing_total is not None and float(existing_total) == float(incoming_total):
+        matched.append("total")
+    severity = "critical" if "total" in matched else "high"
 
-    header = rows[0]
-    vendor_id = header["vendor_id"]
-    invoice_no = header["invoice_no"]
-    invoice_total = header["invoice_total"]
-
-    duplicates = await _find_potential_duplicate_invoices(
-        db,
-        org_id=org_id,
-        vendor_id=vendor_id,
-        invoice_id=invoice_id,
-        invoice_no=invoice_no,
+    return AlertCandidate(
+        org_id=str(org_id),
+        invoice_id=existing_invoice_id,
+        vendor_id=str(vendor_id),
+        type="duplicate_invoice",
+        severity=severity,
+        message=(
+            f"Invoice {incoming_invoice_no} from {incoming_vendor} was re-submitted — "
+            f"matches existing invoice on {', '.join(matched)}."
+        ),
+        meta={
+            "rule": "duplicate_invoice_no_same_vendor",
+            "existing_invoice_id": existing_invoice_id,
+            "incoming_raw_doc_id": incoming_raw_doc_id,
+            "incoming_invoice_no": incoming_invoice_no,
+            "incoming_total": float(incoming_total),
+            "matched_fields": matched,
+        },
     )
-    if not duplicates:
-        return []
-
-    duplicate_summaries: List[Dict[str, Any]] = []
-    any_strong_match = False
-
-    for dup in duplicates:
-        dup_id = dup["id"]
-        dup_invoice_no = dup["invoice_no"]
-        dup_total = dup["total"]
-        dup_date = dup["invoice_date"]
-
-        match_on_invoice_no = invoice_no is not None and dup_invoice_no == invoice_no
-        match_on_total = invoice_total is not None and dup_total == invoice_total
-
-        if match_on_invoice_no and match_on_total:
-            any_strong_match = True
-
-        duplicate_summaries.append(
-            {
-                "invoice_id": str(dup_id),
-                "invoice_no": dup_invoice_no,
-                "total": float(dup_total) if dup_total is not None else None,
-                "invoice_date": str(dup_date) if dup_date is not None else None,
-                "match_on": {
-                    "invoice_no": match_on_invoice_no,
-                    "total": match_on_total,
-                },
-            }
-        )
-
-    # critical if any duplicate matches both invoice_no and total (near-certain duplicate)
-    severity = "critical" if any_strong_match else "medium"
-
-    message = (
-        f"Invoice {invoice_no or invoice_id} for vendor {vendor_id} "
-        f"has {len(duplicate_summaries)} potential duplicate(s) "
-        f"based on matching invoice number and/or total."
-    )
-
-    meta: Dict[str, Any] = {
-        "rule": "duplicate_invoice",
-        "candidate_invoice_id": str(invoice_id),
-        "candidate_invoice_no": invoice_no,
-        "candidate_invoice_total": float(invoice_total) if invoice_total is not None else None,
-        "duplicates": duplicate_summaries,
-    }
-
-    return [
-        AlertCandidate(
-            org_id=str(org_id),
-            invoice_id=str(invoice_id),
-            vendor_id=str(vendor_id),
-            type="duplicate_invoice",
-            severity=severity,
-            message=message,
-            meta=meta,
-        )
-    ]
 
 
 async def _score_contract_policy_violations_for_invoice(
@@ -785,12 +702,6 @@ async def score_invoice(
 
     alerts.extend(
         await _score_vendor_volume_spikes_for_invoice(
-            db, org_id=org_id, invoice_id=invoice_id
-        )
-    )
-
-    alerts.extend(
-        await _score_duplicate_invoices_for_invoice(
             db, org_id=org_id, invoice_id=invoice_id
         )
     )

@@ -32,12 +32,11 @@ from decimal import Decimal
 import psycopg
 import pytest
 
-from apps.api.services import anomaly_scoring
 from apps.api.services.anomaly_scoring import (
     score_invoice,
+    build_duplicate_alert,
     _score_unit_price_deltas_for_invoice,
     _score_vendor_volume_spikes_for_invoice,
-    _score_duplicate_invoices_for_invoice,
     _score_contract_policy_violations_for_invoice,
 )
 
@@ -342,77 +341,56 @@ async def test_volume_spike_no_alert_insufficient_history(db_conn, adb, org_id):
 
 
 # ===========================================================================
-# duplicate_invoice
+# duplicate_invoice (build_duplicate_alert)
 #
-# NOTE: invoices has UNIQUE(org_id, vendor_id, invoice_no), and the rule's
-# finder only matches on EXACT invoice_no for the same vendor. So two real rows
-# can never satisfy the match — the rule is effectively unreachable through
-# normal ingestion (the worker's pre-insert dedup is the real defense). We
-# characterize both that reality and the severity branch (via a targeted patch).
+# Duplicates are caught in the worker BEFORE insert (the duplicate row is never
+# written — see test_worker.py for that end-to-end path). build_duplicate_alert
+# owns the alert's shape and severity; these are pure unit tests of that logic.
 # ===========================================================================
 
-@pytest.mark.anyio
-async def test_duplicate_no_alert_for_same_total_different_number(db_conn, adb, org_id):
-    """Same vendor + same total but different invoice_no is NOT flagged by this rule."""
-    vendor = _mk_vendor(db_conn, org_id)
-    other = _make_invoice(db_conn, org_id, vendor, _uno("DUP-OTHER"), Decimal("3000"), _days_ago(5))
-    _make_line(db_conn, other, "X", "X", Decimal("3000"))
-    cur_inv = _make_invoice(db_conn, org_id, vendor, _uno("DUP-CUR"), Decimal("3000"), _days_ago(1))
-    _make_line(db_conn, cur_inv, "X", "X", Decimal("3000"))
-
-    out = await _score_duplicate_invoices_for_invoice(adb, org_id=org_id, invoice_id=cur_inv)
-    assert out == []
-
-
-@pytest.mark.anyio
-async def test_duplicate_critical_when_number_and_total_match(db_conn, adb, org_id, monkeypatch):
-    """A duplicate matching both invoice_no AND total → critical."""
-    vendor = _mk_vendor(db_conn, org_id)
-    cur_inv = _make_invoice(db_conn, org_id, vendor, "INV-DUP-A", Decimal("3000"), _days_ago(1))
-    _make_line(db_conn, cur_inv, "X", "X", Decimal("3000"))
-
-    async def fake_finder(db, *, org_id, vendor_id, invoice_id, invoice_no):
-        return [{
-            "id": str(uuid.uuid4()),
-            "vendor_id": vendor_id,
-            "invoice_no": invoice_no,          # matches
-            "total": Decimal("3000"),          # matches
-            "invoice_date": date(2026, 1, 1),
-        }]
-
-    monkeypatch.setattr(anomaly_scoring, "_find_potential_duplicate_invoices", fake_finder)
-    out = await _score_duplicate_invoices_for_invoice(adb, org_id=org_id, invoice_id=cur_inv)
-
-    assert len(out) == 1
-    c = out[0]
-    assert c.type == "duplicate_invoice"
-    assert c.severity == "critical"
-    assert len(c.meta["duplicates"]) == 1
-    assert c.meta["duplicates"][0]["match_on"] == {"invoice_no": True, "total": True}
+def test_build_duplicate_alert_critical_when_total_also_matches():
+    alert = build_duplicate_alert(
+        org_id="org-1",
+        vendor_id="vendor-1",
+        existing={"id": "existing-id", "total": Decimal("3000.00")},
+        incoming_invoice_no="INV-DUP-A",
+        incoming_vendor="Acme",
+        incoming_total=3000.0,
+        incoming_raw_doc_id=42,
+    )
+    assert alert.type == "duplicate_invoice"
+    assert alert.severity == "critical"
+    # alert points at the existing invoice, not the rejected re-upload
+    assert alert.invoice_id == "existing-id"
+    assert alert.meta["matched_fields"] == ["vendor_id", "invoice_no", "total"]
+    assert alert.meta["incoming_raw_doc_id"] == 42
 
 
-@pytest.mark.anyio
-async def test_duplicate_medium_when_only_number_matches(db_conn, adb, org_id, monkeypatch):
-    """A duplicate matching invoice_no but NOT total → medium."""
-    vendor = _mk_vendor(db_conn, org_id)
-    cur_inv = _make_invoice(db_conn, org_id, vendor, "INV-DUP-B", Decimal("3000"), _days_ago(1))
-    _make_line(db_conn, cur_inv, "X", "X", Decimal("3000"))
+def test_build_duplicate_alert_high_when_total_differs():
+    alert = build_duplicate_alert(
+        org_id="org-1",
+        vendor_id="vendor-1",
+        existing={"id": "existing-id", "total": Decimal("3000.00")},
+        incoming_invoice_no="INV-DUP-B",
+        incoming_vendor="Acme",
+        incoming_total=9999.0,
+        incoming_raw_doc_id=42,
+    )
+    assert alert.severity == "high"
+    assert alert.meta["matched_fields"] == ["vendor_id", "invoice_no"]
 
-    async def fake_finder(db, *, org_id, vendor_id, invoice_id, invoice_no):
-        return [{
-            "id": str(uuid.uuid4()),
-            "vendor_id": vendor_id,
-            "invoice_no": invoice_no,          # matches
-            "total": Decimal("9999"),          # differs
-            "invoice_date": date(2026, 1, 1),
-        }]
 
-    monkeypatch.setattr(anomaly_scoring, "_find_potential_duplicate_invoices", fake_finder)
-    out = await _score_duplicate_invoices_for_invoice(adb, org_id=org_id, invoice_id=cur_inv)
-
-    assert len(out) == 1
-    assert out[0].severity == "medium"
-    assert out[0].meta["duplicates"][0]["match_on"] == {"invoice_no": True, "total": False}
+def test_build_duplicate_alert_high_when_existing_total_missing():
+    alert = build_duplicate_alert(
+        org_id="org-1",
+        vendor_id="vendor-1",
+        existing={"id": "existing-id", "total": None},
+        incoming_invoice_no="INV-DUP-C",
+        incoming_vendor="Acme",
+        incoming_total=3000.0,
+        incoming_raw_doc_id=42,
+    )
+    assert alert.severity == "high"
 
 
 # ===========================================================================
