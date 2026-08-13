@@ -160,3 +160,17 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on every push:
 3. `build-web` — Next.js build
 
 Railway handles deployment automatically via its native GitHub integration — no CI deploy step needed.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live in GitHub Issues on `LingEnOwO/ProcureSight`, managed via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles, using their default label strings. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
