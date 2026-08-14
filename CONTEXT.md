@@ -38,3 +38,9 @@ for example the median unit price for a purchased item, or a vendor's typical in
 **Alert**:
 A finding raised against one invoice when it deviates from a baseline or violates a contract term.
 _Avoid_: Flag, warning, exception
+
+**Golden corpus**:
+The recorded output of the scorer over the whole dataset, plus the database reads that produced
+it, stored as data in `dataset/golden/`. Replaying it is how a scoring change proves it changed
+no alerts. See `dataset/golden/README.md`.
+_Avoid_: Snapshot tests, fixtures

@@ -1,4 +1,4 @@
-.PHONY: up down ps logs dbshell seed openapi types slack-test mailhog
+.PHONY: up down ps logs dbshell seed openapi types slack-test mailhog scoring-corpus
 
 up:        ## start db + minio + redis + mailhog and init minio bucket
 	docker compose up -d db minio redis mailhog minio-init
@@ -23,6 +23,9 @@ openapi:   ## dump OpenAPI spec to openapi.json
 
 types: openapi  ## generate TS types from openapi.json
 	pnpm dlx openapi-typescript openapi.json -o packages/types/api.d.ts
+
+scoring-corpus:  ## recapture the scoring golden corpus — see dataset/golden/README.md first
+	python -m scripts.scoring_corpus.capture
 
 slack-test:
 	./scripts/slack_test.sh

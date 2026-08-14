@@ -1,0 +1,31 @@
+{
+  "captured": {
+    "alerts_by_type": {
+      "duplicate_invoice": 28,
+      "excessive_consulting": 14,
+      "unit_price_delta": 256
+    },
+    "anomalies_by_detectability": {
+      "current_rules": 277,
+      "future_rag": 60
+    },
+    "anomaly": 337,
+    "clean": 2349,
+    "entries": 2686,
+    "entries_by_kind": {
+      "duplicate_check": 28,
+      "scored": 2658
+    },
+    "entries_with_alerts": 275,
+    "entries_with_retrieved_chunks": 104,
+    "entries_without_alerts": 2411
+  },
+  "expected_from_dataset": {
+    "anomalies_by_detectability": {
+      "current_rules": 277,
+      "future_rag": 60
+    },
+    "anomaly_invoices": 337,
+    "clean_invoices": 2349
+  }
+}
