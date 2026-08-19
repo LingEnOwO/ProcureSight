@@ -52,6 +52,27 @@ needs_dataset = pytest.mark.skipif(
     reason="dataset/generated/ is not committed; counts are checked from summary.json",
 )
 
+# The dataset's own counts, from anomalies.json and the clean invoice files, written
+# down here rather than read from the corpus. Everything else in this file compares
+# the corpus against numbers the same capture run produced, so a truncated corpus is
+# self-consistent and passes. These are the one check it cannot satisfy.
+DATASET_CLEAN = 2349
+DATASET_ANOMALIES = 337
+DATASET_ANOMALIES_BY_DETECTABILITY = {"current_rules": 277, "future_rag": 60}
+
+
+def test_corpus_is_the_size_the_dataset_says_it_should_be(corpus, summary):
+    """Guards against a partial capture — `make scoring-corpus` cut short, or run
+    against a half-loaded database. Change these only alongside the dataset."""
+    assert len(corpus) == DATASET_CLEAN + DATASET_ANOMALIES
+    assert sum(1 for e in corpus if e["source"] == "clean") == DATASET_CLEAN
+    assert sum(1 for e in corpus if e["source"] == "anomaly") == DATASET_ANOMALIES
+    assert summary["expected_from_dataset"] == {
+        "clean_invoices": DATASET_CLEAN,
+        "anomaly_invoices": DATASET_ANOMALIES,
+        "anomalies_by_detectability": DATASET_ANOMALIES_BY_DETECTABILITY,
+    }
+
 
 def test_covers_the_whole_dataset_including_future_rag(corpus, summary):
     expected = summary["expected_from_dataset"]

@@ -596,6 +596,14 @@ def main() -> None:
     args = parser.parse_args()
     if not args.maintenance_url:
         sys.exit("[error] DATABASE_URL is not set and --maintenance-url was not given")
+    if args.limit and args.out == DEFAULT_OUT:
+        # A truncated corpus is self-consistent: summary.json is regenerated from
+        # it, so every coverage check still passes and nothing marks the evidence
+        # as partial. Smoke runs write somewhere else.
+        sys.exit(
+            f"[error] --limit would overwrite the committed corpus at {DEFAULT_OUT}.\n"
+            "        Pass --out to a scratch directory for smoke runs."
+        )
     asyncio.run(run(args.org, args.out, args.limit, args.maintenance_url))
 
 

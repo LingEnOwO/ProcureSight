@@ -88,6 +88,11 @@ the new behaviour and proves nothing.
 4. `export OPENAI_API_KEY=...` (capture aborts without it, for the same reason)
 5. `make scoring-corpus`
 
+For a smoke run, `--limit N` needs an `--out` somewhere else; it refuses to write
+here. A truncated corpus regenerates `summary.json` from itself, so it is
+self-consistent and passes every check except the dataset counts committed in
+`test_scoring_golden_corpus.py`.
+
 Anomaly invoices are deliberately *not* loaded first. Capture inserts each one,
 scores it, and deletes it again, so every anomaly is scored against the clean
 history — the same position the injection run puts it in — and the database is
