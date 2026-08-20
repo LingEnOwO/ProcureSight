@@ -39,6 +39,13 @@ for example the median unit price for a purchased item, or a vendor's typical in
 A finding raised against one invoice when it deviates from a baseline or violates a contract term.
 _Avoid_: Flag, warning, exception
 
+**Alert candidate**:
+An Alert a producer has decided to raise but that has not been persisted yet. Every alert-producing
+entry point returns these, and the alerts repository is the only thing that turns them into Alerts.
+It is the shared output contract of the scoring seam, so it lives in `apps/api/models/alert.py`
+rather than inside any one producer.
+_Avoid_: Proposed alert, draft alert, pending alert
+
 **Golden corpus**:
 The recorded output of the scorer over the whole dataset, plus the database reads that produced
 it, stored as data in `dataset/golden/`. Replaying it is how a scoring change proves it changed

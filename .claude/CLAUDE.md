@@ -125,7 +125,7 @@ Every org-scoped table has PostgreSQL RLS policies keyed on the `app.org_id` GUC
 - `apps/api/routes/` — FastAPI route handlers (thin, delegate to services/repos)
 - `apps/api/services/` — business logic (extraction, scoring, alert notifications, SSE, RAG explanations)
 - `apps/api/repos/` — all SQL queries (no ORM; raw psycopg3)
-- `apps/api/models/` — Pydantic request/response models
+- `apps/api/models/` — Pydantic request/response models, plus shared domain types that cross layers (e.g. `AlertCandidate`)
 - `apps/api/worker/tasks.py` — ARQ job definitions
 - `apps/web/app/(app)/` — protected Next.js pages
 - `apps/web/app/(auth)/` — magic-link login pages
