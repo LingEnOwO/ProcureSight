@@ -87,11 +87,15 @@ the new behaviour and proves nothing.
    `doc_chunks`; with none indexed it silently finds nothing.
 4. `export OPENAI_API_KEY=...` (capture aborts without it, for the same reason)
 5. `make scoring-corpus`
+6. If `anomalies.json` or the clean invoice set changed, update `DATASET_CLEAN`,
+   `DATASET_ANOMALIES` and `DATASET_ANOMALIES_BY_DETECTABILITY` in
+   `apps/api/tests/test_scoring_golden_corpus.py` to match. `dataset/generated/`
+   is not committed, so those constants are the only dataset counts CI can check
+   against — and the only ones a truncated capture cannot satisfy.
 
 For a smoke run, `--limit N` needs an `--out` somewhere else; it refuses to write
 here. A truncated corpus regenerates `summary.json` from itself, so it is
-self-consistent and passes every check except the dataset counts committed in
-`test_scoring_golden_corpus.py`.
+self-consistent and passes every check except those constants.
 
 Anomaly invoices are deliberately *not* loaded first. Capture inserts each one,
 scores it, and deletes it again, so every anomaly is scored against the clean
