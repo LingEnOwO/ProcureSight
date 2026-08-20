@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from psycopg.rows import dict_row
 
+from apps.api.models.alert import AlertCandidate
 from apps.api.repos.contracts import get_vendor_contract
 from apps.api.repos.invoice_stats import (
     get_vendor_sku_baseline_price,
@@ -14,20 +14,6 @@ from apps.api.repos.invoice_stats import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-# Simple container used by the pipeline to represent alerts that should be
-# persisted into the `alerts` table. This keeps scoring logic separate from
-# persistence so we can unit-test it easily.
-@dataclass
-class AlertCandidate:
-    org_id: str
-    invoice_id: str
-    vendor_id: str
-    type: str
-    severity: str  # "low" | "medium" | "high" | "critical"
-    message: str
-    meta: Dict[str, Any]
 
 
 # ── Unit price delta thresholds ──────────────────────────────────────────────

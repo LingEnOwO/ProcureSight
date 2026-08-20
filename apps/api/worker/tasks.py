@@ -28,7 +28,8 @@ from apps.api.services.validator import (
     needs_review,
     validate_invoice,
 )
-from apps.api.services.anomaly_scoring import AlertCandidate, build_duplicate_alert, score_invoice
+from apps.api.models.alert import AlertCandidate
+from apps.api.services.anomaly_scoring import build_duplicate_alert, score_invoice
 from apps.api.services.alert_notifications import (
     build_invoice_link,
     build_sse_payload,

@@ -32,7 +32,7 @@ from psycopg_pool import ConnectionPool
 from unittest.mock import AsyncMock
 
 from apps.api.worker import tasks
-from apps.api.services.anomaly_scoring import AlertCandidate
+from apps.api.models.alert import AlertCandidate
 
 
 SUPERUSER_URL = os.getenv(

@@ -37,7 +37,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Dict, Iterator, List, Optional, Set, Union
 
-from apps.api.services.anomaly_scoring import AlertCandidate
+from apps.api.models.alert import AlertCandidate
 
 # Namespace for the synthetic identifiers written into the corpus. Fixed so that
 # regenerating the corpus on a fresh database produces the same ids.

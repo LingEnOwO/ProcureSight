@@ -6,7 +6,8 @@ from psycopg import AsyncConnection
 
 from apps.api.auth import get_user_context, UserContext
 from apps.api.deps import org_aconn
-from apps.api.services.anomaly_scoring import AlertCandidate, score_invoice
+from apps.api.models.alert import AlertCandidate
+from apps.api.services.anomaly_scoring import score_invoice
 
 router = APIRouter(prefix="/score", tags=["scoring"])
 
