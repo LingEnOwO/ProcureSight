@@ -46,6 +46,14 @@ It is the shared output contract of the scoring seam, so it lives in `apps/api/m
 rather than inside any one producer.
 _Avoid_: Proposed alert, draft alert, pending alert
 
+**Invoice snapshot**:
+Everything the scoring rules need about one invoice, gathered in advance and held as plain data:
+the invoice header, its lines, and the Baselines for the Purchased Items on those lines. One
+gathering adapter builds it and is the only scoring code that reads the database; rules are
+functions over it. It never narrows — a snapshot holds every Baseline row matching a SKU, because
+choosing between them is a rule.
+_Avoid_: Context, bundle, payload
+
 **Golden corpus**:
 The recorded output of the scorer over the whole dataset, plus the database reads that produced
 it, stored as data in `dataset/golden/`. Replaying it is how a scoring change proves it changed
