@@ -28,6 +28,47 @@ MEDIUM_TOTAL_RATIO_THRESHOLD = 2.0  # 2x–3x    → "medium"
 HIGH_TOTAL_RATIO_THRESHOLD = 3.0    # 3x+       → "high"
 
 
+def select_price_baseline(
+    baselines: List[Dict[str, Any]],
+    *,
+    desc: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """Pick the one Baseline a line is compared against, out of the SKU's rows.
+
+    This is a rule, not I/O, which is why it lives here: it decides which slice
+    of a Purchased Item's history counts as "the" baseline. The gathering
+    adapter hands over every row for the SKU and makes no such choice.
+
+    It reproduces exactly what the per-line query it replaces resolved to:
+
+    * a line with a description compares against the rows recorded under that
+      same description, taking the best-sampled of them;
+    * a line with no description compares against the SKU's best-sampled row,
+      whatever description it was recorded under.
+
+    That description matching is the behaviour ADR-0001 says is wrong — Line
+    Description carries no identity — but the `vendor_unit_price_stats` view
+    still groups by it, and realigning the two is a separate, behaviour-changing
+    change. Keeping the mismatch in one named function is what makes it a single
+    line to delete when that change lands.
+
+    Parameters
+    ----------
+    baselines:
+        The rows for one SKU, as the snapshot holds them: ordered by
+        `sample_size` descending, un-narrowed.
+    desc:
+        The line's description, or None.
+
+    Returns
+    -------
+    Dict[str, Any] | None
+        The chosen Baseline row, or None if nothing matches.
+    """
+    candidates = baselines if desc is None else [b for b in baselines if b["desc"] == desc]
+    return candidates[0] if candidates else None
+
+
 async def _fetch_invoice_lines(
     db: Any,
     *,

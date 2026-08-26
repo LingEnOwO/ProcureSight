@@ -179,3 +179,61 @@ def update_invoice_fields(conn: Connection, invoice_id: str, fields: Dict[str, A
     with conn.cursor() as cur:
         cur.execute(sql_stmt, (*values, invoice_id))
         return cur.rowcount > 0
+
+# ---------------------------------------------------------------------------
+# Async reads
+#
+# Everything above is sync, taking the worker's `Connection`. The two below are
+# async because their caller — the scoring gathering adapter — runs on an async
+# connection. The sync/async split is about who calls; where the SQL lives is
+# not negotiable either way, and it lives here.
+# ---------------------------------------------------------------------------
+
+# Fetches one invoice's header fields, scoped to an org. Returns None if no such
+# invoice exists in that org.
+async def get_invoice_header(db: Any, *, org_id: str, invoice_id: str) -> Optional[Dict[str, Any]]:
+    query = """
+        SELECT
+          id,
+          org_id,
+          vendor_id,
+          invoice_no,
+          invoice_date,
+          due_date,
+          total
+        FROM invoices
+        WHERE org_id = %(org_id)s
+          AND id = %(invoice_id)s;
+    """
+    async with db.cursor(row_factory=dict_row) as cur:
+        await cur.execute(query, {"org_id": org_id, "invoice_id": invoice_id})
+        return await cur.fetchone()
+
+
+# Fetches every line on one invoice. Not org-scoped in the SQL: `invoice_lines`
+# has no org_id column and its RLS policy scopes it through the parent invoice.
+#
+# Deliberately unordered, which is worth explaining because it looks like an
+# oversight. Two per-line rules raise one alert per offending line, so line order
+# decides alert order. There is no column that reproduces the order the rules see
+# today: `invoice_lines` has no ordinal and no timestamp, and its `id` is a random
+# UUID, so `ORDER BY id` would be deterministic but would deterministically differ
+# from today's order on every multi-line invoice. Leaving it unordered matches the
+# unordered join this replaces. A real fix needs a line-ordinal column, which is a
+# schema change and belongs in its own ticket.
+async def get_invoice_lines(db: Any, *, invoice_id: str) -> List[Dict[str, Any]]:
+    query = """
+        SELECT
+          id,
+          invoice_id,
+          sku,
+          "desc",
+          qty,
+          unit_price,
+          line_total
+        FROM invoice_lines
+        WHERE invoice_id = %(invoice_id)s;
+    """
+    async with db.cursor(row_factory=dict_row) as cur:
+        await cur.execute(query, {"invoice_id": invoice_id})
+        return await cur.fetchall()
