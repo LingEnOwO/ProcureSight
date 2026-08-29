@@ -1,11 +1,12 @@
-"""The gathering adapter: where scoring will read the database.
+"""The gathering adapter: where scoring reads the database.
 
 Scoring an invoice is two steps — gather, then decide. This module is the first
-step. Once the rules consume the snapshot it will be the only scoring code
+step. Once every rule consumes the snapshot it will be the only scoring code
 holding a connection, and everything downstream of ``gather_invoice_snapshot``
-will be arithmetic over plain data. That is not true yet: the rules in
-``anomaly_scoring`` still read the database themselves, and will until the next
-change moves them over.
+will be arithmetic over plain data. That is true of ``unit_price_delta``, which
+is a function of the snapshot and issues no query of its own; the other three
+rules in ``anomaly_scoring`` still read the database themselves, and will until
+the changes that move them over land.
 
 The adapter obeys two clauses, and they decide every case that comes after:
 
@@ -20,8 +21,15 @@ The adapter obeys two clauses, and they decide every case that comes after:
    sample_size DESC`` plus taking the first row, that selection is a rule and
    lives in the scoring module as ``select_price_baseline``.
 
-Nothing consumes the snapshot yet — the rules still read the database
-themselves. Making it load-bearing is the next change.
+``unit_price_delta`` is the rule that consumes it today, and the per-line
+Baseline query it used to issue is gone: an invoice's worth of lines now costs
+one batched fetch rather than one query per line.
+
+Mid-migration that is not yet a net win on every invoice. The adapter's header
+and lines reads are a third read of data the other three rules still fetch for
+themselves, so a one-line invoice now costs six queries where it cost five. The
+Baseline saving overtakes that from two lines up, and the duplicate read goes
+away entirely once the remaining rules take their invoice off the snapshot.
 """
 from __future__ import annotations
 

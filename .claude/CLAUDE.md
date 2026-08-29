@@ -126,7 +126,8 @@ Every org-scoped table has PostgreSQL RLS policies keyed on the `app.org_id` GUC
 - `apps/api/services/` — business logic (extraction, scoring, alert notifications, SSE, RAG explanations)
   - `scoring_gather.py` — the gathering adapter. It fetches by keys derived from the invoice and never
     narrows; any row selection is a rule in `anomaly_scoring.py`. It is *becoming* the only scoring code
-    that reads the database — the rules in `anomaly_scoring.py` still read it directly for now.
+    that reads the database: `unit_price_delta` is a function of the snapshot and holds no connection,
+    while the other three rules in `anomaly_scoring.py` still read the database directly for now.
 - `apps/api/repos/` — all SQL queries (no ORM; raw psycopg3)
 - `apps/api/models/` — Pydantic request/response models, plus shared domain types that cross layers (e.g. `AlertCandidate`, `InvoiceSnapshot`)
 - `apps/api/worker/tasks.py` — ARQ job definitions

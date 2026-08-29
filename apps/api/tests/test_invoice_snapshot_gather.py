@@ -24,11 +24,10 @@ from decimal import Decimal
 
 import psycopg
 import pytest
-from psycopg.rows import dict_row
 
 from apps.api.models.invoice_snapshot import InvoiceSnapshot
 from apps.api.repos.invoice_stats import (
-    get_vendor_sku_baseline_price,
+    get_vendor_unit_price_stats,
     get_vendor_unit_price_stats_for_skus,
 )
 from apps.api.services.anomaly_scoring import select_price_baseline
@@ -40,6 +39,25 @@ DATABASE_URL = os.getenv(
 )
 
 MIN_SAMPLES = 5  # what the view needs before a baseline is worth comparing against
+
+
+async def _baseline_the_old_query_resolved(db, *, org_id, vendor_id, sku, desc=None):
+    """What the deleted per-line lookup resolved to, as a reference implementation.
+
+    It is gone from ``repos/invoice_stats.py`` — the rule reads Baselines from
+    the snapshot now, so nothing in the app called it any more. It survives here
+    only as the *other* side of an equivalence check, which is why re-stating it
+    is not duplication: an equivalence proved against itself proves nothing.
+
+    It rests on one property of ``get_vendor_unit_price_stats`` — that the view
+    read comes back best-sampled first — so that property is asserted directly
+    by ``test_the_view_read_returns_the_best_sampled_row_first`` below rather
+    than left to drift.
+    """
+    rows = await get_vendor_unit_price_stats(
+        db, org_id=org_id, vendor_id=vendor_id, sku=sku, desc=desc
+    )
+    return rows[0] if rows else None
 
 
 # ---------------------------------------------------------------------------
@@ -276,13 +294,33 @@ async def test_every_description_variant_survives_into_the_snapshot(db, org_id, 
 
 
 @pytest.mark.anyio
+async def test_the_view_read_returns_the_best_sampled_row_first(db, org_id, vendor_id):
+    """The property the reference implementation above leans on.
+
+    ``_baseline_the_old_query_resolved`` takes ``rows[0]``, and
+    ``select_price_baseline`` takes ``candidates[0]``. Both are only "the
+    best-sampled row" because ``get_vendor_unit_price_stats`` orders by
+    ``sample_size`` descending. Drop that ORDER BY and every equivalence test
+    below would keep passing by coincidence, so assert it on its own.
+    """
+    await _seed_price_history(db, org_id, vendor_id, "WIDGET", "Widget", 40, n=5)
+    await _seed_price_history(db, org_id, vendor_id, "WIDGET", "WIDGET, blue", 90, n=8)
+
+    rows = await get_vendor_unit_price_stats(db, org_id=org_id, vendor_id=vendor_id, sku="WIDGET")
+
+    sample_sizes = [row["sample_size"] for row in rows]
+    assert sample_sizes == sorted(sample_sizes, reverse=True)
+    assert rows[0]["desc"] == "WIDGET, blue"
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("line_desc", ["Widget", "WIDGET, blue", None, "unseen description"])
 async def test_batch_plus_selection_resolves_what_the_per_line_lookup_resolved(
     db, org_id, vendor_id, line_desc
 ):
     """The behaviour-preservation check this ticket exists to make.
 
-    Whatever ``get_vendor_sku_baseline_price`` returned for a line, the batched
+    Whatever the per-line lookup returned for a line, the batched
     fetch plus ``select_price_baseline`` must return the same row.
     """
     await _seed_price_history(db, org_id, vendor_id, "WIDGET", "Widget", 40, n=6)
@@ -290,7 +328,7 @@ async def test_batch_plus_selection_resolves_what_the_per_line_lookup_resolved(
     inv = await _mk_invoice(db, org_id, vendor_id)
     await _mk_line(db, inv, "WIDGET", line_desc, Decimal("200"))
 
-    per_line = await get_vendor_sku_baseline_price(
+    per_line = await _baseline_the_old_query_resolved(
         db, org_id=org_id, vendor_id=vendor_id, sku="WIDGET", desc=line_desc
     )
 
@@ -315,7 +353,7 @@ async def test_a_tie_on_sample_size_resolves_the_same_way_in_both(db, org_id, ve
     inv = await _mk_invoice(db, org_id, vendor_id)
     await _mk_line(db, inv, "WIDGET", None, Decimal("200"))
 
-    per_line = await get_vendor_sku_baseline_price(
+    per_line = await _baseline_the_old_query_resolved(
         db, org_id=org_id, vendor_id=vendor_id, sku="WIDGET", desc=None
     )
     snapshot = await gather_invoice_snapshot(db, org_id=org_id, invoice_id=inv)
@@ -339,7 +377,7 @@ async def test_batched_repo_returns_the_union_of_the_per_sku_lookups(db, org_id,
 
     assert {row["sku"] for row in batched} == {"A", "B"}
     for row in batched:
-        one = await get_vendor_sku_baseline_price(
+        one = await _baseline_the_old_query_resolved(
             db, org_id=org_id, vendor_id=vendor_id, sku=row["sku"], desc=row["desc"]
         )
         assert one == row

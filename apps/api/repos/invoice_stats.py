@@ -99,42 +99,6 @@ async def get_vendor_unit_price_stats(
         return await cur.fetchall()
 
 
-async def get_vendor_sku_baseline_price(
-    db: Any,
-    *,
-    org_id: str,
-    vendor_id: str,
-    sku: str,
-    desc: Optional[str] = None,
-) -> Optional[Dict[str, Any]]:
-    """
-    Convenience helper: fetch a single baseline price record for a given
-    (org, vendor, sku[, desc]).
-
-    If multiple rows exist (e.g., duplicate SKU/description variants), the row
-    with the largest `sample_size` will be returned.
-
-    Returns
-    -------
-    Dict[str, Any] | None
-        A single stats row from `vendor_unit_price_stats`, or None if no stats
-        exist for the given key.
-    """
-    rows = await get_vendor_unit_price_stats(
-        db,
-        org_id=org_id,
-        vendor_id=vendor_id,
-        sku=sku,
-        desc=desc,
-    )
-    if not rows:
-        return None
-
-    # Because `get_vendor_unit_price_stats` already orders by sample_size DESC,
-    # the first row is the best baseline candidate.
-    return rows[0]
-
-
 async def get_vendor_unit_price_stats_for_skus(
     db: Any,
     *,

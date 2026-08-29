@@ -38,6 +38,12 @@ from decimal import Decimal
 from typing import Any, Dict, Iterator, List, Optional, Set, Union
 
 from apps.api.models.alert import AlertCandidate
+from apps.api.repos.invoices import (
+    INVOICE_HEADER_COLUMNS,
+    INVOICE_LINE_COLUMNS,
+    JOINED_HEADER_ALIASES,
+    JOINED_LINE_ALIASES,
+)
 
 # Namespace for the synthetic identifiers written into the corpus. Fixed so that
 # regenerating the corpus on a fresh database produces the same ids.
@@ -212,17 +218,45 @@ class MissingTapeRead(KeyError):
 # to record; replay replaces them to serve. Both go through `intercepting`, so a
 # sixth read is added here once rather than in two places.
 #
-# The price and spend stats are intercepted at the *plural* repository functions
-# even though the scorer calls the singular helpers: those helpers narrow (order
-# by sample size, take the first row), and the corpus is about what the database
-# returned before any narrowing.
+# The spend stats are intercepted at the *plural* repository function even
+# though the rule calls the singular helper: that helper narrows (take the first
+# row), and the corpus is about what the database returned before any narrowing.
+#
+# ``get_vendor_unit_price_stats`` is the singular price read that no scoring rule
+# makes any more — ``unit_price_delta`` reads Baselines from the snapshot. It
+# stays on the seam for two reasons: ``record_sku_baselines`` calls it directly
+# at capture time, and its replay stub turns a per-line price query smuggled back
+# into a rule into a named MissingTapeRead rather than a crash against ``None``.
+#
+# The gathering adapter's three reads are served, not recorded. Everything they
+# return is already on the tape — the header and lines are a re-projection of
+# ``invoice_rows``, and the batched Baseline fetch is the per-SKU stats reads
+# ``record_sku_baselines`` writes at capture time. Deriving them keeps tapes
+# captured before the rules moved replayable afterwards, which is the whole
+# reason those per-SKU rows were recorded.
 
 SEAM = {
-    "_fetch_invoice_lines": "apps.api.services.anomaly_scoring",
+    "get_invoice_joined_rows": "apps.api.services.anomaly_scoring",
     "get_vendor_contract": "apps.api.services.anomaly_scoring",
     "_search_chunks_async": "apps.api.services.anomaly_scoring",
     "get_vendor_unit_price_stats": "apps.api.repos.invoice_stats",
     "get_vendor_spend_stats": "apps.api.repos.invoice_stats",
+    "get_invoice_header": "apps.api.services.scoring_gather",
+    "get_invoice_lines": "apps.api.services.scoring_gather",
+    "get_vendor_unit_price_stats_for_skus": "apps.api.services.scoring_gather",
+}
+
+# Where each snapshot column sits in the joined row ``get_invoice_joined_rows``
+# recorded. Derived from the column tuples in ``apps/api/repos/invoices.py``
+# rather than restated here, so a column added there is picked up rather than
+# silently served short.
+_HEADER_FROM_ROW = {
+    column: JOINED_HEADER_ALIASES.get(column, column)
+    for column in INVOICE_HEADER_COLUMNS
+}
+_LINE_FROM_ROW = {
+    column: JOINED_LINE_ALIASES.get(column, column)
+    for column in INVOICE_LINE_COLUMNS
 }
 
 
@@ -315,12 +349,39 @@ def served_from(tape: ScoringTape) -> Iterator[None]:
             )
         return [dict(chunk) for chunk in tape.retrieval["chunks"]]
 
+    def reproject(row: Dict[str, Any], columns: Dict[str, str]) -> Dict[str, Any]:
+        return {column: row[source] for column, source in columns.items()}
+
+    async def invoice_header(db: Any, *, org_id: str, invoice_id: str) -> Optional[Dict[str, Any]]:
+        if not tape.invoice_rows:
+            return None
+        return reproject(tape.invoice_rows[0], _HEADER_FROM_ROW)
+
+    async def invoice_lines(db: Any, *, invoice_id: str) -> List[Dict[str, Any]]:
+        return [reproject(row, _LINE_FROM_ROW) for row in tape.invoice_rows]
+
+    async def unit_price_stats_for_skus(
+        db: Any, *, org_id: str, vendor_id: str, skus: Any
+    ) -> List[Dict[str, Any]]:
+        rows: List[Dict[str, Any]] = []
+        # The query orders by sku, then by the ordering each per-SKU read already
+        # came back in — so concatenating the recorded reads in SKU order is it.
+        for sku in sorted(skus):
+            key = stats_key(str(vendor_id), sku, None)
+            if key not in tape.unit_price_stats:
+                raise MissingTapeRead(f"unit price stats not recorded for {key}")
+            rows.extend(dict(row) for row in tape.unit_price_stats[key])
+        return rows
+
     with intercepting(
-        _fetch_invoice_lines=fetch_invoice_lines,
+        get_invoice_joined_rows=fetch_invoice_lines,
         get_vendor_contract=vendor_contract,
         _search_chunks_async=search_chunks,
         get_vendor_unit_price_stats=unit_price_stats,
         get_vendor_spend_stats=spend_stats,
+        get_invoice_header=invoice_header,
+        get_invoice_lines=invoice_lines,
+        get_vendor_unit_price_stats_for_skus=unit_price_stats_for_skus,
     ):
         yield
 

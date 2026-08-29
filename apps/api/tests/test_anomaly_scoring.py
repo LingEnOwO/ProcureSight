@@ -35,7 +35,6 @@ import pytest
 from apps.api.services.anomaly_scoring import (
     score_invoice,
     build_duplicate_alert,
-    _score_unit_price_deltas_for_invoice,
     _score_vendor_volume_spikes_for_invoice,
     _score_contract_policy_violations_for_invoice,
 )
@@ -198,76 +197,11 @@ def _seed_price_history(db_conn, org_id, vendor_id, sku, desc, hist_price, n=5):
 # ===========================================================================
 # unit_price_delta
 # ===========================================================================
-
-@pytest.mark.anyio
-async def test_unit_price_high_severity(db_conn, adb, org_id):
-    """3x+ over the historical median → high."""
-    vendor = _mk_vendor(db_conn, org_id)
-    _seed_price_history(db_conn, org_id, vendor, "WIDGET", "Widget", 40, n=5)
-    cur_inv = _make_invoice(db_conn, org_id, vendor, _uno("CUR"), Decimal("1.00"), _days_ago(1))
-    _make_line(db_conn, cur_inv, "WIDGET", "Widget", Decimal("200"))  # 200/40 = 5x
-
-    out = await _score_unit_price_deltas_for_invoice(adb, org_id=org_id, invoice_id=cur_inv)
-
-    assert len(out) == 1
-    c = out[0]
-    assert c.type == "unit_price_delta"
-    assert c.severity == "high"
-    assert c.meta["ratio"] == pytest.approx(5.0)
-    assert c.meta["median_unit_price"] == pytest.approx(40.0)
-    assert c.meta["unit_price"] == pytest.approx(200.0)
-    assert c.meta["sample_size"] == 6  # 5 historical + current line
-
-
-@pytest.mark.anyio
-async def test_unit_price_medium_severity(db_conn, adb, org_id):
-    """2x–3x median → medium."""
-    vendor = _mk_vendor(db_conn, org_id)
-    _seed_price_history(db_conn, org_id, vendor, "GADGET", "Gadget", 40, n=5)
-    cur_inv = _make_invoice(db_conn, org_id, vendor, _uno("CUR"), Decimal("1.00"), _days_ago(1))
-    _make_line(db_conn, cur_inv, "GADGET", "Gadget", Decimal("100"))  # 2.5x
-
-    out = await _score_unit_price_deltas_for_invoice(adb, org_id=org_id, invoice_id=cur_inv)
-    assert len(out) == 1
-    assert out[0].severity == "medium"
-    assert out[0].meta["ratio"] == pytest.approx(2.5)
-
-
-@pytest.mark.anyio
-async def test_unit_price_low_severity(db_conn, adb, org_id):
-    """1.5x–2x median → low."""
-    vendor = _mk_vendor(db_conn, org_id)
-    _seed_price_history(db_conn, org_id, vendor, "BOLT", "Bolt", 40, n=5)
-    cur_inv = _make_invoice(db_conn, org_id, vendor, _uno("CUR"), Decimal("1.00"), _days_ago(1))
-    _make_line(db_conn, cur_inv, "BOLT", "Bolt", Decimal("70"))  # 1.75x
-
-    out = await _score_unit_price_deltas_for_invoice(adb, org_id=org_id, invoice_id=cur_inv)
-    assert len(out) == 1
-    assert out[0].severity == "low"
-
-
-@pytest.mark.anyio
-async def test_unit_price_no_alert_below_threshold(db_conn, adb, org_id):
-    """Below 1.5x median → no alert."""
-    vendor = _mk_vendor(db_conn, org_id)
-    _seed_price_history(db_conn, org_id, vendor, "NUT", "Nut", 40, n=5)
-    cur_inv = _make_invoice(db_conn, org_id, vendor, _uno("CUR"), Decimal("1.00"), _days_ago(1))
-    _make_line(db_conn, cur_inv, "NUT", "Nut", Decimal("50"))  # 1.25x
-
-    out = await _score_unit_price_deltas_for_invoice(adb, org_id=org_id, invoice_id=cur_inv)
-    assert out == []
-
-
-@pytest.mark.anyio
-async def test_unit_price_no_alert_insufficient_samples(db_conn, adb, org_id):
-    """Fewer than MIN_SAMPLE_SIZE_FOR_BASELINE lines in the group → no baseline → no alert."""
-    vendor = _mk_vendor(db_conn, org_id)
-    _seed_price_history(db_conn, org_id, vendor, "RARE", "Rare", 40, n=3)  # +current = 4 < 5
-    cur_inv = _make_invoice(db_conn, org_id, vendor, _uno("CUR"), Decimal("1.00"), _days_ago(1))
-    _make_line(db_conn, cur_inv, "RARE", "Rare", Decimal("400"))  # huge ratio, but too few samples
-
-    out = await _score_unit_price_deltas_for_invoice(adb, org_id=org_id, invoice_id=cur_inv)
-    assert out == []
+#
+# The rule is a function of a snapshot now, so its own cases live in
+# test_unit_price_rule.py, which needs no database. What is left here is the
+# orchestrator test at the bottom of this file, which still exercises the rule
+# end to end against real Postgres.
 
 
 # ===========================================================================

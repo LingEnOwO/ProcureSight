@@ -181,26 +181,92 @@ def update_invoice_fields(conn: Connection, invoice_id: str, fields: Dict[str, A
         return cur.rowcount > 0
 
 # ---------------------------------------------------------------------------
+# The columns scoring reads
+#
+# Named once, here, because three places select them: the two snapshot reads
+# below, the joined read the not-yet-migrated rules still make, and the corpus
+# tape, which derives its replay reprojection from these same tuples (see
+# `scripts/scoring_corpus/tape.py`). Adding a column is one edit, in one file.
+# ---------------------------------------------------------------------------
+
+INVOICE_HEADER_COLUMNS = (
+    "id",
+    "org_id",
+    "vendor_id",
+    "invoice_no",
+    "invoice_date",
+    "due_date",
+    "total",
+)
+
+INVOICE_LINE_COLUMNS = (
+    "id",
+    "invoice_id",
+    "sku",
+    "desc",
+    "qty",
+    "unit_price",
+    "line_total",
+)
+
+# In a joined row the header and the line share one namespace, so the columns
+# whose names would collide are aliased. The line's `invoice_id` is not selected
+# at all — the header's aliased `id` already carries the same value.
+JOINED_HEADER_ALIASES = {"id": "invoice_id", "total": "invoice_total"}
+JOINED_LINE_ALIASES = {"id": "line_id"}
+
+
+def _quoted(column: str) -> str:
+    # `desc` is a reserved word; the rest need no quoting.
+    return f'"{column}"' if column == "desc" else column
+
+
+def _select_list(
+    prefix: Optional[str],
+    columns: tuple,
+    aliases: Optional[Dict[str, str]] = None,
+) -> str:
+    """Render one SELECT list from the column tuples above.
+
+    Composed from module constants only — no caller input reaches it — so this
+    builds SQL text without building an injection surface.
+    """
+    aliases = aliases or {}
+    parts = []
+    for column in columns:
+        ref = f"{prefix}.{_quoted(column)}" if prefix else _quoted(column)
+        alias = aliases.get(column)
+        parts.append(f"{ref} AS {alias}" if alias else ref)
+    return ",\n          ".join(parts)
+
+
+_JOINED_COLUMNS = (
+    _select_list("i", INVOICE_HEADER_COLUMNS, JOINED_HEADER_ALIASES)
+    + ",\n          "
+    + _select_list(
+        "il",
+        tuple(c for c in INVOICE_LINE_COLUMNS if c != "invoice_id"),
+        JOINED_LINE_ALIASES,
+    )
+)
+
+
+# ---------------------------------------------------------------------------
 # Async reads
 #
-# Everything above is sync, taking the worker's `Connection`. The two below are
-# async because their caller — the scoring gathering adapter — runs on an async
-# connection. The sync/async split is about who calls; where the SQL lives is
-# not negotiable either way, and it lives here.
+# Everything above is sync, taking the worker's `Connection`. The three below
+# are async because their callers — the scoring gathering adapter, and the rules
+# that have not crossed the seam yet — run on an async connection. The
+# sync/async split is about who calls; where the SQL lives is not negotiable
+# either way, and it lives here.
 # ---------------------------------------------------------------------------
 
 # Fetches one invoice's header fields, scoped to an org. Returns None if no such
 # invoice exists in that org.
 async def get_invoice_header(db: Any, *, org_id: str, invoice_id: str) -> Optional[Dict[str, Any]]:
-    query = """
+    query = f"""
         SELECT
-          id,
-          org_id,
-          vendor_id,
-          invoice_no,
-          invoice_date,
-          due_date,
-          total
+          {_select_list(None, INVOICE_HEADER_COLUMNS)}
         FROM invoices
         WHERE org_id = %(org_id)s
           AND id = %(invoice_id)s;
@@ -220,20 +286,39 @@ async def get_invoice_header(db: Any, *, org_id: str, invoice_id: str) -> Option
 # UUID, so `ORDER BY id` would be deterministic but would deterministically differ
 # from today's order on every multi-line invoice. Leaving it unordered matches the
 # unordered join this replaces. A real fix needs a line-ordinal column, which is a
-# schema change and belongs in its own ticket.
+# schema change and belongs in its own ticket (#26).
 async def get_invoice_lines(db: Any, *, invoice_id: str) -> List[Dict[str, Any]]:
-    query = """
+    query = f"""
         SELECT
-          id,
-          invoice_id,
-          sku,
-          "desc",
-          qty,
-          unit_price,
-          line_total
+          {_select_list(None, INVOICE_LINE_COLUMNS)}
         FROM invoice_lines
         WHERE invoice_id = %(invoice_id)s;
     """
     async with db.cursor(row_factory=dict_row) as cur:
         await cur.execute(query, {"invoice_id": invoice_id})
+        return await cur.fetchall()
+
+
+# Fetches one invoice joined to its lines, one flat row per line, scoped to an
+# org. This is the pre-seam read: the rules that still hold a connection take
+# their header fields off the first row and iterate the rest. `unit_price_delta`
+# does not use it — it reads the same data off the snapshot — and the last
+# caller goes away when the remaining rules cross the seam.
+async def get_invoice_joined_rows(
+    db: Any,
+    *,
+    org_id: str,
+    invoice_id: str,
+) -> List[Dict[str, Any]]:
+    query = f"""
+        SELECT
+          {_JOINED_COLUMNS}
+        FROM invoices AS i
+        JOIN invoice_lines AS il
+          ON il.invoice_id = i.id
+        WHERE i.org_id = %(org_id)s
+          AND i.id = %(invoice_id)s;
+    """
+    async with db.cursor(row_factory=dict_row) as cur:
+        await cur.execute(query, {"org_id": org_id, "invoice_id": invoice_id})
         return await cur.fetchall()

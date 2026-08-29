@@ -54,8 +54,11 @@ def _tape(**overrides) -> ScoringTape:
         org_id=ORG,
         invoice_id=INVOICE,
         invoice_rows=[row],
+        # Keyed by SKU alone: the gathering adapter fetches a Baseline per
+        # Purchased Item, and picking between a SKU's description variants is a
+        # rule the scorer applies afterwards.
         unit_price_stats={
-            stats_key(VENDOR, row["sku"], row["desc"]): [
+            stats_key(VENDOR, row["sku"], None): [
                 {
                     "org_id": ORG,
                     "vendor_id": VENDOR,
@@ -147,7 +150,7 @@ def test_replay_preserves_alert_ordering():
 
 
 def test_replay_records_invoices_that_produce_no_alerts():
-    tape = _tape(unit_price_stats={stats_key(VENDOR, "AGL-MUL", "Mulch Installation (per cubic yard)"): []})
+    tape = _tape(unit_price_stats={stats_key(VENDOR, "AGL-MUL", None): []})
     assert replay_scoring(tape) == []
 
 
@@ -164,7 +167,7 @@ def _consulting_tape() -> ScoringTape:
         org_id=ORG,
         invoice_id=INVOICE,
         invoice_rows=[row],
-        unit_price_stats={stats_key(VENDOR, row["sku"], row["desc"]): []},
+        unit_price_stats={stats_key(VENDOR, row["sku"], None): []},
         spend_stats={VENDOR: []},
         contracts={VENDOR: None},
         retrieval={

@@ -7,11 +7,11 @@ from typing import Any, Dict, List, Optional
 from psycopg.rows import dict_row
 
 from apps.api.models.alert import AlertCandidate
+from apps.api.models.invoice_snapshot import InvoiceSnapshot
 from apps.api.repos.contracts import get_vendor_contract
-from apps.api.repos.invoice_stats import (
-    get_vendor_sku_baseline_price,
-    get_single_vendor_spend_stats,
-)
+from apps.api.repos.invoice_stats import get_single_vendor_spend_stats
+from apps.api.repos.invoices import get_invoice_joined_rows
+from apps.api.services.scoring_gather import gather_invoice_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -69,44 +69,7 @@ def select_price_baseline(
     return candidates[0] if candidates else None
 
 
-async def _fetch_invoice_lines(
-    db: Any,
-    *,
-    org_id: str,
-    invoice_id: str,
-) -> List[Dict[str, Any]]:
-    query = """
-        SELECT
-          i.id AS invoice_id,
-          i.org_id,
-          i.vendor_id,
-          i.invoice_no,
-          i.invoice_date,
-          i.due_date,
-          i.total AS invoice_total,
-          il.id AS line_id,
-          il.sku,
-          il."desc",
-          il.qty,
-          il.unit_price,
-          il.line_total
-        FROM invoices AS i
-        JOIN invoice_lines AS il
-          ON il.invoice_id = i.id
-        WHERE i.org_id = %(org_id)s
-          AND i.id = %(invoice_id)s;
-    """
-    async with db.cursor(row_factory=dict_row) as cur:
-        await cur.execute(query, {"org_id": org_id, "invoice_id": invoice_id})
-        return await cur.fetchall()
-
-
-async def _score_unit_price_deltas_for_invoice(
-    db: Any,
-    *,
-    org_id: str,
-    invoice_id: str,
-) -> List[AlertCandidate]:
+def score_unit_price_deltas(snapshot: InvoiceSnapshot) -> List[AlertCandidate]:
     """
     Rule: flag line items whose unit price is significantly higher than the
     historical median price for the same (org, vendor, sku[, desc]).
@@ -115,32 +78,29 @@ async def _score_unit_price_deltas_for_invoice(
       low    — 1.5x–2x median
       medium — 2x–3x median
       high   — 3x+ median
+
+    A function of the snapshot, not of a connection. Every Baseline it needs is
+    already in ``snapshot.price_baselines``, keyed by SKU and un-narrowed;
+    choosing which of a SKU's rows a line is compared against is
+    ``select_price_baseline``, above.
     """
-    rows = await _fetch_invoice_lines(db, org_id=org_id, invoice_id=invoice_id)
-    if not rows:
-        return []
+    invoice = snapshot.invoice
+    invoice_id = str(invoice["id"])
+    vendor_id = invoice["vendor_id"]
+    invoice_no = invoice["invoice_no"]
 
     candidates: List[AlertCandidate] = []
-    header = rows[0]
-    vendor_id = header["vendor_id"]
-    invoice_no = header["invoice_no"]
 
-    for row in rows:
-        line_id = row["line_id"]
-        sku = row["sku"]
-        desc = row["desc"]
-        unit_price = row["unit_price"]
+    for line in snapshot.lines:
+        line_id = line["id"]
+        sku = line["sku"]
+        desc = line["desc"]
+        unit_price = line["unit_price"]
 
         if unit_price is None or sku is None:
             continue
 
-        baseline = await get_vendor_sku_baseline_price(
-            db,
-            org_id=org_id,
-            vendor_id=vendor_id,
-            sku=sku,
-            desc=desc,
-        )
+        baseline = select_price_baseline(snapshot.price_baselines.get(sku, []), desc=desc)
         if baseline is None:
             continue
 
@@ -180,15 +140,15 @@ async def _score_unit_price_deltas_for_invoice(
             "sku": sku,
             "desc": desc,
             "invoice_no": invoice_no,
-            "invoice_id": str(invoice_id),
+            "invoice_id": invoice_id,
             "vendor_id": str(vendor_id),
             "line_id": str(line_id),
         }
 
         candidates.append(
             AlertCandidate(
-                org_id=str(org_id),
-                invoice_id=str(invoice_id),
+                org_id=snapshot.org_id,
+                invoice_id=invoice_id,
                 vendor_id=str(vendor_id),
                 type="unit_price_delta",
                 severity=severity,
@@ -214,7 +174,7 @@ async def _score_vendor_volume_spikes_for_invoice(
       medium — 2x–3x baseline average
       high   — 3x+ baseline average
     """
-    rows = await _fetch_invoice_lines(db, org_id=org_id, invoice_id=invoice_id)
+    rows = await get_invoice_joined_rows(db, org_id=org_id, invoice_id=invoice_id)
     if not rows:
         return []
 
@@ -362,7 +322,7 @@ async def _score_contract_policy_violations_for_invoice(
       unapproved_category      — line item desc/sku not in approved_categories → high
       payment_terms_violation  — due_date - invoice_date > payment_terms_days  → medium
     """
-    rows = await _fetch_invoice_lines(db, org_id=org_id, invoice_id=invoice_id)
+    rows = await get_invoice_joined_rows(db, org_id=org_id, invoice_id=invoice_id)
     if not rows:
         return []
 
@@ -577,7 +537,7 @@ async def _score_excessive_consulting_for_invoice(
       high   — contract rate limit found and invoice rate exceeds it
       medium — consulting total > threshold and no contract evidence found
     """
-    rows = await _fetch_invoice_lines(db, org_id=org_id, invoice_id=invoice_id)
+    rows = await get_invoice_joined_rows(db, org_id=org_id, invoice_id=invoice_id)
     if not rows:
         return []
 
@@ -718,14 +678,18 @@ async def score_invoice(
     """
     High-level scoring entry point for a single invoice.
     Aggregates alerts from all rule-based checks.
+
+    Half gather-then-decide, half not, and that is the state of the migration
+    rather than a design: ``unit_price_delta`` is a function of the snapshot,
+    while the other three still take the connection and read what they need.
     """
     alerts: List[AlertCandidate] = []
 
-    alerts.extend(
-        await _score_unit_price_deltas_for_invoice(
-            db, org_id=org_id, invoice_id=invoice_id
-        )
-    )
+    # A missing invoice yields no snapshot and so no alerts — the same silence
+    # the connection-taking rules produce when their query comes back empty.
+    snapshot = await gather_invoice_snapshot(db, org_id=org_id, invoice_id=invoice_id)
+    if snapshot is not None:
+        alerts.extend(score_unit_price_deltas(snapshot))
 
     alerts.extend(
         await _score_vendor_volume_spikes_for_invoice(

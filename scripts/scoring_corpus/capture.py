@@ -75,11 +75,15 @@ DEFAULT_OUT = REPO_ROOT / "dataset" / "golden" / "scoring"
 
 @contextmanager
 def recording(tape: ScoringTape) -> Iterator[None]:
-    """Run the scorer for real, writing every repository read into ``tape``."""
-    real_fetch_lines = seam_function("_fetch_invoice_lines")
+    """Run the scorer for real, writing every repository read into ``tape``.
+
+    The singular price read is not wrapped: no rule makes it any more, so
+    wrapping it recorded nothing. The Baselines the snapshot is served from are
+    read deliberately by ``record_sku_baselines`` instead, keyed by SKU alone.
+    """
+    real_fetch_lines = seam_function("get_invoice_joined_rows")
     real_contract = seam_function("get_vendor_contract")
     real_search = seam_function("_search_chunks_async")
-    real_price_stats = seam_function("get_vendor_unit_price_stats")
     real_spend_stats = seam_function("get_vendor_spend_stats")
 
     async def fetch_invoice_lines(db, *, org_id, invoice_id):
@@ -87,11 +91,6 @@ def recording(tape: ScoringTape) -> Iterator[None]:
         # All four rules issue this same query; recording the first is enough.
         if not tape.invoice_rows:
             tape.invoice_rows = [dict(r) for r in rows]
-        return rows
-
-    async def unit_price_stats(db, *, org_id, vendor_id=None, sku=None, desc=None):
-        rows = await real_price_stats(db, org_id=org_id, vendor_id=vendor_id, sku=sku, desc=desc)
-        tape.unit_price_stats[stats_key(str(vendor_id), sku, desc)] = [dict(r) for r in rows]
         return rows
 
     async def spend_stats(db, *, org_id, vendor_id=None):
@@ -115,25 +114,24 @@ def recording(tape: ScoringTape) -> Iterator[None]:
         return chunks
 
     with intercepting(
-        _fetch_invoice_lines=fetch_invoice_lines,
+        get_invoice_joined_rows=fetch_invoice_lines,
         get_vendor_contract=vendor_contract,
         _search_chunks_async=search_chunks,
-        get_vendor_unit_price_stats=unit_price_stats,
         get_vendor_spend_stats=spend_stats,
     ):
         yield
 
 
 async def record_sku_baselines(aconn: Any, tape: ScoringTape, *, org_id: str) -> None:
-    """Also record the price baselines keyed by (vendor, sku) alone.
+    """Record the price baselines keyed by (vendor, sku) alone.
 
-    Today's rule looks one up per line, filtering on the line description as well
-    as the SKU. #15 replaces that with one batched fetch keyed by the invoice's
-    SKUs — a call this tape would otherwise have no answer for, so replaying the
-    refactor would raise instead of comparing. Per ADR-0001 the description
-    carries no identity, so these are the un-narrowed rows for the same keys, and
-    recording them now is what keeps the corpus usable *after* the code moves.
-    Nothing reads them today.
+    These are what the gathering adapter's batched fetch is served from on
+    replay: one un-narrowed set of rows per Purchased Item on the invoice, with
+    the description left out because per ADR-0001 it carries no identity.
+
+    They are read here rather than recorded through the seam because the batched
+    fetch is not intercepted — reading them separately is what let tapes captured
+    before the rules moved off the connection replay after they moved.
     """
     read_stats = seam_function("get_vendor_unit_price_stats")
     keys = {
