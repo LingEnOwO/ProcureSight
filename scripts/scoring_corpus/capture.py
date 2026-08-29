@@ -81,14 +81,15 @@ def recording(tape: ScoringTape) -> Iterator[None]:
     wrapping it recorded nothing. The Baselines the snapshot is served from are
     read deliberately by ``record_sku_baselines`` instead, keyed by SKU alone.
     """
-    real_fetch_lines = seam_function("get_invoice_joined_rows")
+    real_fetch_lines = seam_function("_fetch_invoice_lines")
     real_contract = seam_function("get_vendor_contract")
     real_search = seam_function("_search_chunks_async")
     real_spend_stats = seam_function("get_vendor_spend_stats")
 
     async def fetch_invoice_lines(db, *, org_id, invoice_id):
         rows = await real_fetch_lines(db, org_id=org_id, invoice_id=invoice_id)
-        # All four rules issue this same query; recording the first is enough.
+        # The three rules still on the connection issue this same query;
+        # recording the first is enough.
         if not tape.invoice_rows:
             tape.invoice_rows = [dict(r) for r in rows]
         return rows
@@ -114,7 +115,7 @@ def recording(tape: ScoringTape) -> Iterator[None]:
         return chunks
 
     with intercepting(
-        get_invoice_joined_rows=fetch_invoice_lines,
+        _fetch_invoice_lines=fetch_invoice_lines,
         get_vendor_contract=vendor_contract,
         _search_chunks_async=search_chunks,
         get_vendor_spend_stats=spend_stats,

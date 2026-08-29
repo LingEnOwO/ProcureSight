@@ -38,12 +38,6 @@ from decimal import Decimal
 from typing import Any, Dict, Iterator, List, Optional, Set, Union
 
 from apps.api.models.alert import AlertCandidate
-from apps.api.repos.invoices import (
-    INVOICE_HEADER_COLUMNS,
-    INVOICE_LINE_COLUMNS,
-    JOINED_HEADER_ALIASES,
-    JOINED_LINE_ALIASES,
-)
 
 # Namespace for the synthetic identifiers written into the corpus. Fixed so that
 # regenerating the corpus on a fresh database produces the same ids.
@@ -236,7 +230,7 @@ class MissingTapeRead(KeyError):
 # reason those per-SKU rows were recorded.
 
 SEAM = {
-    "get_invoice_joined_rows": "apps.api.services.anomaly_scoring",
+    "_fetch_invoice_lines": "apps.api.services.anomaly_scoring",
     "get_vendor_contract": "apps.api.services.anomaly_scoring",
     "_search_chunks_async": "apps.api.services.anomaly_scoring",
     "get_vendor_unit_price_stats": "apps.api.repos.invoice_stats",
@@ -246,17 +240,35 @@ SEAM = {
     "get_vendor_unit_price_stats_for_skus": "apps.api.services.scoring_gather",
 }
 
-# Where each snapshot column sits in the joined row ``get_invoice_joined_rows``
-# recorded. Derived from the column tuples in ``apps/api/repos/invoices.py``
-# rather than restated here, so a column added there is picked up rather than
-# silently served short.
+# Snapshot column -> the key it sits under in a recorded ``invoice_rows`` row.
+#
+# The joined read puts the header and the line in one namespace, so the two
+# `id`s and the two totals are aliased apart; the line's `invoice_id` is not
+# selected at all, and comes off the header's aliased `id`.
+#
+# Stated here rather than imported from `repos`, because this describes a row
+# already written to a tape on disk, not whatever the reads select today. The
+# two still have to agree for replay to serve a whole snapshot, and
+# `test_the_replay_reprojection_covers_every_column_the_snapshot_reads_select`
+# asserts they do — so a column added to either read fails a named test, which
+# is the prompt to recapture, rather than a KeyError deep inside a replay.
 _HEADER_FROM_ROW = {
-    column: JOINED_HEADER_ALIASES.get(column, column)
-    for column in INVOICE_HEADER_COLUMNS
+    "id": "invoice_id",
+    "org_id": "org_id",
+    "vendor_id": "vendor_id",
+    "invoice_no": "invoice_no",
+    "invoice_date": "invoice_date",
+    "due_date": "due_date",
+    "total": "invoice_total",
 }
 _LINE_FROM_ROW = {
-    column: JOINED_LINE_ALIASES.get(column, column)
-    for column in INVOICE_LINE_COLUMNS
+    "id": "line_id",
+    "invoice_id": "invoice_id",
+    "sku": "sku",
+    "desc": "desc",
+    "qty": "qty",
+    "unit_price": "unit_price",
+    "line_total": "line_total",
 }
 
 
@@ -374,7 +386,7 @@ def served_from(tape: ScoringTape) -> Iterator[None]:
         return rows
 
     with intercepting(
-        get_invoice_joined_rows=fetch_invoice_lines,
+        _fetch_invoice_lines=fetch_invoice_lines,
         get_vendor_contract=vendor_contract,
         _search_chunks_async=search_chunks,
         get_vendor_unit_price_stats=unit_price_stats,

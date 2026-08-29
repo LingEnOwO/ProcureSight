@@ -10,7 +10,6 @@ from apps.api.models.alert import AlertCandidate
 from apps.api.models.invoice_snapshot import InvoiceSnapshot
 from apps.api.repos.contracts import get_vendor_contract
 from apps.api.repos.invoice_stats import get_single_vendor_spend_stats
-from apps.api.repos.invoices import get_invoice_joined_rows
 from apps.api.services.scoring_gather import gather_invoice_snapshot
 
 logger = logging.getLogger(__name__)
@@ -67,6 +66,46 @@ def select_price_baseline(
     """
     candidates = baselines if desc is None else [b for b in baselines if b["desc"] == desc]
     return candidates[0] if candidates else None
+
+
+async def _fetch_invoice_lines(
+    db: Any,
+    *,
+    org_id: str,
+    invoice_id: str,
+) -> List[Dict[str, Any]]:
+    """One invoice joined to its lines, one flat row per line, scoped to an org.
+
+    The pre-seam read: the three rules that still hold a connection take their
+    header fields off the first row and iterate the rest. ``unit_price_delta``
+    does not call it — it reads the same data off the snapshot — and the last
+    caller goes away when the remaining rules cross the seam, at which point
+    this goes with them.
+    """
+    query = """
+        SELECT
+          i.id AS invoice_id,
+          i.org_id,
+          i.vendor_id,
+          i.invoice_no,
+          i.invoice_date,
+          i.due_date,
+          i.total AS invoice_total,
+          il.id AS line_id,
+          il.sku,
+          il."desc",
+          il.qty,
+          il.unit_price,
+          il.line_total
+        FROM invoices AS i
+        JOIN invoice_lines AS il
+          ON il.invoice_id = i.id
+        WHERE i.org_id = %(org_id)s
+          AND i.id = %(invoice_id)s;
+    """
+    async with db.cursor(row_factory=dict_row) as cur:
+        await cur.execute(query, {"org_id": org_id, "invoice_id": invoice_id})
+        return await cur.fetchall()
 
 
 def score_unit_price_deltas(snapshot: InvoiceSnapshot) -> List[AlertCandidate]:
@@ -174,7 +213,7 @@ async def _score_vendor_volume_spikes_for_invoice(
       medium — 2x–3x baseline average
       high   — 3x+ baseline average
     """
-    rows = await get_invoice_joined_rows(db, org_id=org_id, invoice_id=invoice_id)
+    rows = await _fetch_invoice_lines(db, org_id=org_id, invoice_id=invoice_id)
     if not rows:
         return []
 
@@ -322,7 +361,7 @@ async def _score_contract_policy_violations_for_invoice(
       unapproved_category      — line item desc/sku not in approved_categories → high
       payment_terms_violation  — due_date - invoice_date > payment_terms_days  → medium
     """
-    rows = await get_invoice_joined_rows(db, org_id=org_id, invoice_id=invoice_id)
+    rows = await _fetch_invoice_lines(db, org_id=org_id, invoice_id=invoice_id)
     if not rows:
         return []
 
@@ -537,7 +576,7 @@ async def _score_excessive_consulting_for_invoice(
       high   — contract rate limit found and invoice rate exceeds it
       medium — consulting total > threshold and no contract evidence found
     """
-    rows = await get_invoice_joined_rows(db, org_id=org_id, invoice_id=invoice_id)
+    rows = await _fetch_invoice_lines(db, org_id=org_id, invoice_id=invoice_id)
     if not rows:
         return []
 

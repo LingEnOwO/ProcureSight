@@ -126,7 +126,7 @@ seam is for.
 
 A recapture is also not byte-identical. Two consecutive runs differed in 35 of
 2,686 entries: 34 because `excessive_consulting` retrieval depends on a live
-embedding API and pgvector ordering, and 1 because `get_invoice_joined_rows` has no
+embedding API and pgvector ordering, and 1 because `_fetch_invoice_lines` has no
 `ORDER BY`, so line order — and with it per-line alert order and `line_id`
 numbering — is whatever Postgres returns. Every aggregate in `summary.json` was
 identical across both runs. Neither wobble affects replay, which reads the

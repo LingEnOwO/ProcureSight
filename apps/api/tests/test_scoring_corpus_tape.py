@@ -4,12 +4,17 @@ These cover the machinery, not the corpus. The corpus itself is checked by
 test_scoring_golden_corpus.py. No database and no network here — that is the
 whole point of the tape.
 """
+import inspect
+import re
 from datetime import date
 from decimal import Decimal
 
 import pytest
 
+from apps.api.repos.invoices import get_invoice_header, get_invoice_lines
 from scripts.scoring_corpus.tape import (
+    _HEADER_FROM_ROW,
+    _LINE_FROM_ROW,
     DuplicateCheckTape,
     MissingTapeRead,
     ScoringTape,
@@ -231,3 +236,31 @@ def test_duplicate_check_replays_without_any_recorded_reads():
     assert [a.type for a in alerts] == ["duplicate_invoice"]
     assert alerts[0].severity == "critical"
     assert alerts[0].meta["matched_fields"] == ["vendor_id", "invoice_no", "total"]
+
+
+# ---------------------------------------------------------------------------
+# The replay reprojection
+# ---------------------------------------------------------------------------
+
+def _selected_columns(read) -> set:
+    """The column names the literal SELECT inside `read` asks for."""
+    select = re.search(r"SELECT\n(.*?)\n\s*FROM", inspect.getsource(read), re.S)
+    assert select, f"no literal SELECT found in {read.__name__}"
+    return {column.strip().strip('"') for column in select.group(1).split(",")}
+
+
+def test_the_replay_reprojection_covers_every_column_the_snapshot_reads_select():
+    """Replay serves the gatherer's two reads out of the recorded joined row.
+
+    `tape.py` states that mapping itself rather than importing it, because a tape
+    on disk has the columns it was captured with. That independence is the point,
+    but it can go stale silently — a column added to either read would be served
+    short, and the rules would see None where the database has a value. This is
+    the check that turns that into a failure here instead.
+
+    It guards the column names, not the aliases they are read out from: renaming
+    an alias in `_fetch_invoice_lines` still breaks replay silently. Guarding
+    that half means parsing a SELECT that aliases, which this regex cannot do.
+    """
+    assert set(_HEADER_FROM_ROW) == _selected_columns(get_invoice_header)
+    assert set(_LINE_FROM_ROW) == _selected_columns(get_invoice_lines)
