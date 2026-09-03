@@ -1,34 +1,18 @@
 from __future__ import annotations
 
 import logging
-import os
 import re
-from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from psycopg.rows import dict_row
 
+from apps.api.models.alert import AlertCandidate
+from apps.api.models.invoice_snapshot import InvoiceSnapshot
 from apps.api.repos.contracts import get_vendor_contract
-from apps.api.repos.invoice_stats import (
-    get_vendor_sku_baseline_price,
-    get_single_vendor_spend_stats,
-)
+from apps.api.repos.invoice_stats import get_single_vendor_spend_stats
+from apps.api.services.scoring_gather import gather_invoice_snapshot
 
 logger = logging.getLogger(__name__)
-
-
-# Simple container used by the pipeline to represent alerts that should be
-# persisted into the `alerts` table. This keeps scoring logic separate from
-# persistence so we can unit-test it easily.
-@dataclass
-class AlertCandidate:
-    org_id: str
-    invoice_id: str
-    vendor_id: str
-    type: str
-    severity: str  # "low" | "medium" | "high" | "critical"
-    message: str
-    meta: Dict[str, Any]
 
 
 # ── Unit price delta thresholds ──────────────────────────────────────────────
@@ -43,12 +27,61 @@ MEDIUM_TOTAL_RATIO_THRESHOLD = 2.0  # 2x–3x    → "medium"
 HIGH_TOTAL_RATIO_THRESHOLD = 3.0    # 3x+       → "high"
 
 
+def select_price_baseline(
+    baselines: List[Dict[str, Any]],
+    *,
+    desc: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """Pick the one Baseline a line is compared against, out of the SKU's rows.
+
+    This is a rule, not I/O, which is why it lives here: it decides which slice
+    of a Purchased Item's history counts as "the" baseline. The gathering
+    adapter hands over every row for the SKU and makes no such choice.
+
+    It reproduces exactly what the per-line query it replaces resolved to:
+
+    * a line with a description compares against the rows recorded under that
+      same description, taking the best-sampled of them;
+    * a line with no description compares against the SKU's best-sampled row,
+      whatever description it was recorded under.
+
+    That description matching is the behaviour ADR-0001 says is wrong — Line
+    Description carries no identity — but the `vendor_unit_price_stats` view
+    still groups by it, and realigning the two is a separate, behaviour-changing
+    change. Keeping the mismatch in one named function is what makes it a single
+    line to delete when that change lands.
+
+    Parameters
+    ----------
+    baselines:
+        The rows for one SKU, as the snapshot holds them: ordered by
+        `sample_size` descending, un-narrowed.
+    desc:
+        The line's description, or None.
+
+    Returns
+    -------
+    Dict[str, Any] | None
+        The chosen Baseline row, or None if nothing matches.
+    """
+    candidates = baselines if desc is None else [b for b in baselines if b["desc"] == desc]
+    return candidates[0] if candidates else None
+
+
 async def _fetch_invoice_lines(
     db: Any,
     *,
     org_id: str,
     invoice_id: str,
 ) -> List[Dict[str, Any]]:
+    """One invoice joined to its lines, one flat row per line, scoped to an org.
+
+    The pre-seam read: the three rules that still hold a connection take their
+    header fields off the first row and iterate the rest. ``unit_price_delta``
+    does not call it — it reads the same data off the snapshot — and the last
+    caller goes away when the remaining rules cross the seam, at which point
+    this goes with them.
+    """
     query = """
         SELECT
           i.id AS invoice_id,
@@ -75,12 +108,7 @@ async def _fetch_invoice_lines(
         return await cur.fetchall()
 
 
-async def _score_unit_price_deltas_for_invoice(
-    db: Any,
-    *,
-    org_id: str,
-    invoice_id: str,
-) -> List[AlertCandidate]:
+def score_unit_price_deltas(snapshot: InvoiceSnapshot) -> List[AlertCandidate]:
     """
     Rule: flag line items whose unit price is significantly higher than the
     historical median price for the same (org, vendor, sku[, desc]).
@@ -89,32 +117,29 @@ async def _score_unit_price_deltas_for_invoice(
       low    — 1.5x–2x median
       medium — 2x–3x median
       high   — 3x+ median
+
+    A function of the snapshot, not of a connection. Every Baseline it needs is
+    already in ``snapshot.price_baselines``, keyed by SKU and un-narrowed;
+    choosing which of a SKU's rows a line is compared against is
+    ``select_price_baseline``, above.
     """
-    rows = await _fetch_invoice_lines(db, org_id=org_id, invoice_id=invoice_id)
-    if not rows:
-        return []
+    invoice = snapshot.invoice
+    invoice_id = str(invoice["id"])
+    vendor_id = invoice["vendor_id"]
+    invoice_no = invoice["invoice_no"]
 
     candidates: List[AlertCandidate] = []
-    header = rows[0]
-    vendor_id = header["vendor_id"]
-    invoice_no = header["invoice_no"]
 
-    for row in rows:
-        line_id = row["line_id"]
-        sku = row["sku"]
-        desc = row["desc"]
-        unit_price = row["unit_price"]
+    for line in snapshot.lines:
+        line_id = line["id"]
+        sku = line["sku"]
+        desc = line["desc"]
+        unit_price = line["unit_price"]
 
         if unit_price is None or sku is None:
             continue
 
-        baseline = await get_vendor_sku_baseline_price(
-            db,
-            org_id=org_id,
-            vendor_id=vendor_id,
-            sku=sku,
-            desc=desc,
-        )
+        baseline = select_price_baseline(snapshot.price_baselines.get(sku, []), desc=desc)
         if baseline is None:
             continue
 
@@ -154,15 +179,15 @@ async def _score_unit_price_deltas_for_invoice(
             "sku": sku,
             "desc": desc,
             "invoice_no": invoice_no,
-            "invoice_id": str(invoice_id),
+            "invoice_id": invoice_id,
             "vendor_id": str(vendor_id),
             "line_id": str(line_id),
         }
 
         candidates.append(
             AlertCandidate(
-                org_id=str(org_id),
-                invoice_id=str(invoice_id),
+                org_id=snapshot.org_id,
+                invoice_id=invoice_id,
                 vendor_id=str(vendor_id),
                 type="unit_price_delta",
                 severity=severity,
@@ -172,50 +197,6 @@ async def _score_unit_price_deltas_for_invoice(
         )
 
     return candidates
-
-
-async def _find_potential_duplicate_invoices(
-    db: Any,
-    *,
-    org_id: str,
-    vendor_id: str,
-    invoice_id: str,
-    invoice_no: Optional[str],
-) -> List[Dict[str, Any]]:
-    if invoice_no is None:
-        return []
-
-    base_conditions = [
-        "org_id = %(org_id)s",
-        "vendor_id = %(vendor_id)s",
-        "id <> %(invoice_id)s",
-    ]
-    values: Dict[str, Any] = {
-        "org_id": org_id,
-        "vendor_id": vendor_id,
-        "invoice_id": invoice_id,
-    }
-
-    if invoice_no is None:
-        return []
-
-    values["invoice_no"] = invoice_no
-    where_clause = " AND ".join(base_conditions)
-    where_clause += " AND invoice_no = %(invoice_no)s"
-
-    query = f"""
-        SELECT
-          id,
-          vendor_id,
-          invoice_no,
-          total,
-          invoice_date
-        FROM invoices
-        WHERE {where_clause};
-    """
-    async with db.cursor(row_factory=dict_row) as cur:
-        await cur.execute(query, values)
-        return await cur.fetchall()
 
 
 async def _score_vendor_volume_spikes_for_invoice(
@@ -315,94 +296,55 @@ async def _score_vendor_volume_spikes_for_invoice(
     ]
 
 
-async def _score_duplicate_invoices_for_invoice(
-    db: Any,
+def build_duplicate_alert(
     *,
     org_id: str,
-    invoice_id: str,
-) -> List[AlertCandidate]:
-    """
-    Rule: detect potential duplicate invoices for the same vendor.
+    vendor_id: str,
+    existing: Dict[str, Any],
+    incoming_invoice_no: str,
+    incoming_vendor: str,
+    incoming_total: float,
+    incoming_raw_doc_id: int,
+) -> AlertCandidate:
+    """Build the alert for a re-submitted invoice that duplicates an existing one.
+
+    Duplicates are caught in the worker *before* insert (via
+    ``find_invoice_by_key``), so the duplicate row is never written and there is
+    nothing to "score" post-hoc. This function owns the alert's shape and
+    severity so that — like every other alert type — that decision lives in the
+    scoring domain rather than in the worker's orchestration code.
 
     Severity:
-      critical — duplicate matches both invoice_no AND total
-      medium   — duplicate matches only invoice_no or only total
+      critical — the existing invoice's total also matches (near-certain duplicate)
+      high     — same vendor + invoice_no but a different total (possibly a
+                 corrected re-upload; still worth a human look)
     """
-    rows = await _fetch_invoice_lines(db, org_id=org_id, invoice_id=invoice_id)
-    if not rows:
-        return []
+    existing_invoice_id = str(existing["id"])
+    matched = ["vendor_id", "invoice_no"]
+    existing_total = existing.get("total")
+    if existing_total is not None and float(existing_total) == float(incoming_total):
+        matched.append("total")
+    severity = "critical" if "total" in matched else "high"
 
-    header = rows[0]
-    vendor_id = header["vendor_id"]
-    invoice_no = header["invoice_no"]
-    invoice_total = header["invoice_total"]
-
-    duplicates = await _find_potential_duplicate_invoices(
-        db,
-        org_id=org_id,
-        vendor_id=vendor_id,
-        invoice_id=invoice_id,
-        invoice_no=invoice_no,
+    return AlertCandidate(
+        org_id=str(org_id),
+        invoice_id=existing_invoice_id,
+        vendor_id=str(vendor_id),
+        type="duplicate_invoice",
+        severity=severity,
+        message=(
+            f"Invoice {incoming_invoice_no} from {incoming_vendor} was re-submitted — "
+            f"matches existing invoice on {', '.join(matched)}."
+        ),
+        meta={
+            "rule": "duplicate_invoice_no_same_vendor",
+            "existing_invoice_id": existing_invoice_id,
+            "incoming_raw_doc_id": incoming_raw_doc_id,
+            "incoming_invoice_no": incoming_invoice_no,
+            "incoming_total": float(incoming_total),
+            "matched_fields": matched,
+        },
     )
-    if not duplicates:
-        return []
-
-    duplicate_summaries: List[Dict[str, Any]] = []
-    any_strong_match = False
-
-    for dup in duplicates:
-        dup_id = dup["id"]
-        dup_invoice_no = dup["invoice_no"]
-        dup_total = dup["total"]
-        dup_date = dup["invoice_date"]
-
-        match_on_invoice_no = invoice_no is not None and dup_invoice_no == invoice_no
-        match_on_total = invoice_total is not None and dup_total == invoice_total
-
-        if match_on_invoice_no and match_on_total:
-            any_strong_match = True
-
-        duplicate_summaries.append(
-            {
-                "invoice_id": str(dup_id),
-                "invoice_no": dup_invoice_no,
-                "total": float(dup_total) if dup_total is not None else None,
-                "invoice_date": str(dup_date) if dup_date is not None else None,
-                "match_on": {
-                    "invoice_no": match_on_invoice_no,
-                    "total": match_on_total,
-                },
-            }
-        )
-
-    # critical if any duplicate matches both invoice_no and total (near-certain duplicate)
-    severity = "critical" if any_strong_match else "medium"
-
-    message = (
-        f"Invoice {invoice_no or invoice_id} for vendor {vendor_id} "
-        f"has {len(duplicate_summaries)} potential duplicate(s) "
-        f"based on matching invoice number and/or total."
-    )
-
-    meta: Dict[str, Any] = {
-        "rule": "duplicate_invoice",
-        "candidate_invoice_id": str(invoice_id),
-        "candidate_invoice_no": invoice_no,
-        "candidate_invoice_total": float(invoice_total) if invoice_total is not None else None,
-        "duplicates": duplicate_summaries,
-    }
-
-    return [
-        AlertCandidate(
-            org_id=str(org_id),
-            invoice_id=str(invoice_id),
-            vendor_id=str(vendor_id),
-            type="duplicate_invoice",
-            severity=severity,
-            message=message,
-            meta=meta,
-        )
-    ]
 
 
 async def _score_contract_policy_violations_for_invoice(
@@ -574,7 +516,7 @@ async def _search_chunks_async(
     from openai import AsyncOpenAI
     from apps.api.settings import settings
 
-    api_key = os.getenv("OPENAI_API_KEY") or settings.OPENAI_API_KEY
+    api_key = settings.openai_api_key
     if not api_key:
         return []
 
@@ -775,23 +717,21 @@ async def score_invoice(
     """
     High-level scoring entry point for a single invoice.
     Aggregates alerts from all rule-based checks.
+
+    Half gather-then-decide, half not, and that is the state of the migration
+    rather than a design: ``unit_price_delta`` is a function of the snapshot,
+    while the other three still take the connection and read what they need.
     """
     alerts: List[AlertCandidate] = []
 
-    alerts.extend(
-        await _score_unit_price_deltas_for_invoice(
-            db, org_id=org_id, invoice_id=invoice_id
-        )
-    )
+    # A missing invoice yields no snapshot and so no alerts — the same silence
+    # the connection-taking rules produce when their query comes back empty.
+    snapshot = await gather_invoice_snapshot(db, org_id=org_id, invoice_id=invoice_id)
+    if snapshot is not None:
+        alerts.extend(score_unit_price_deltas(snapshot))
 
     alerts.extend(
         await _score_vendor_volume_spikes_for_invoice(
-            db, org_id=org_id, invoice_id=invoice_id
-        )
-    )
-
-    alerts.extend(
-        await _score_duplicate_invoices_for_invoice(
             db, org_id=org_id, invoice_id=invoice_id
         )
     )

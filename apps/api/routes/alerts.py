@@ -2,8 +2,9 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
+from psycopg import Connection
 
-from ..db import pool
+from ..deps import org_conn
 from ..repos.alerts import list_alerts_for_org, update_alert_status
 from ..auth import get_user_context, UserContext
 
@@ -31,24 +32,21 @@ def list_alerts(
     severity: Optional[str] = Query(None, description="Filter by severity"),
     limit: int = Query(50, ge=1, le=100, description="Max number of alerts"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
-    user_ctx: UserContext = Depends(get_user_context)
+    conn: Connection = Depends(org_conn),
+    user_ctx: UserContext = Depends(get_user_context),
 ) -> Dict[str, Any]:
     """List alerts for the current org with optional filtering.
 
     Org context derived from authenticated user's JWT.
     """
-    with pool.connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT set_config('app.org_id', %s, true)", (user_ctx.org_id,))
-            cur.execute("SELECT set_config('app.actor_id', %s, true)", (user_ctx.business_user_id,))
-        items = list_alerts_for_org(
-            conn,
-            org_id=user_ctx.org_id,
-            status=status,
-            severity=severity,
-            limit=limit,
-            offset=offset,
-        )
+    items = list_alerts_for_org(
+        conn,
+        org_id=user_ctx.org_id,
+        status=status,
+        severity=severity,
+        limit=limit,
+        offset=offset,
+    )
 
     return {
         "items": items,
@@ -61,24 +59,21 @@ def list_alerts(
 def patch_alert(
     alert_id: str,
     payload: AlertUpdatePayload,
-    user_ctx: UserContext = Depends(get_user_context)
+    conn: Connection = Depends(org_conn),
+    user_ctx: UserContext = Depends(get_user_context),
 ) -> Dict[str, Any]:
     """Update an alert's status / acknowledgement fields.
 
     This is used by the UI to acknowledge or dismiss alerts. The org scope is
     enforced by always including the current org_id in the update query.
     """
-    with pool.connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT set_config('app.org_id', %s, true)", (user_ctx.org_id,))
-            cur.execute("SELECT set_config('app.actor_id', %s, true)", (user_ctx.business_user_id,))
-        updated = update_alert_status(
-            conn,
-            org_id=user_ctx.org_id,
-            alert_id=alert_id,
-            status=payload.status,
-            acknowledged_by=payload.acknowledged_by,
-        )
+    updated = update_alert_status(
+        conn,
+        org_id=user_ctx.org_id,
+        alert_id=alert_id,
+        status=payload.status,
+        acknowledged_by=payload.acknowledged_by,
+    )
 
     if updated is None:
         raise HTTPException(status_code=404, detail="Alert not found")

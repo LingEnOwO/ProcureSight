@@ -4,7 +4,7 @@ from typing import Any, Dict, Mapping, Optional, Union
 
 import httpx
 
-from apps.api.services.anomaly_scoring import AlertCandidate
+from apps.api.models.alert import AlertCandidate
 from apps.api.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -17,7 +17,7 @@ def _normalize_alert(alert: AlertLike) -> Dict[str, Any]:
     Convert an AlertCandidate or dict-like object into a plain dict.
 
     This lets callers pass either:
-      - the AlertCandidate dataclass from the scoring service, or
+      - the AlertCandidate dataclass produced by alert scoring, or
       - a row/dict fetched from the `alerts` table.
 
     The returned dict is safe to use for formatting Slack messages or

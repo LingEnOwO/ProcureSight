@@ -1,31 +1,14 @@
 import { serverGet } from "@/lib/serverApiClient";
+import { asObject, extractItems, pickString, type UnknownRecord } from "@/lib/dataHelpers";
 
 export const dynamic = "force-dynamic";
 
-type UnknownRecord = Record<string, unknown>;
-
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function asObject(value: unknown): UnknownRecord {
-  return value && typeof value === "object" ? (value as UnknownRecord) : {};
-}
-
 function pickIdLike(obj: UnknownRecord): string {
-  const v = obj.id ?? obj.invoice_id ?? obj.vendor_id ?? obj.uuid;
-  return typeof v === "string" ? v : typeof v === "number" ? String(v) : "";
+  return pickString(obj, ["id", "invoice_id", "vendor_id", "uuid"], { numberToString: true });
 }
 
 function pickTitleLike(obj: UnknownRecord): string {
-  const v =
-    obj.name ??
-    obj.vendor_name ??
-    obj.invoice_no ??
-    obj.invoice_number ??
-    obj.title ??
-    obj.filename;
-  return typeof v === "string" ? v : "";
+  return pickString(obj, ["name", "vendor_name", "invoice_no", "invoice_number", "title", "filename"]);
 }
 
 export default async function Page() {
@@ -37,15 +20,8 @@ export default async function Page() {
   const vendorsError = !vendorsData;
   const invoicesError = !invoicesData;
 
-  const vendorsItems =
-    asArray(vendorsData).length > 0
-      ? asArray(vendorsData)
-      : asArray(asObject(vendorsData).items);
-
-  const invoicesItems =
-    asArray(invoicesData).length > 0
-      ? asArray(invoicesData)
-      : asArray(asObject(invoicesData).items);
+  const vendorsItems = extractItems(vendorsData);
+  const invoicesItems = extractItems(invoicesData);
 
   const vendorCount = vendorsItems.length;
   const invoiceCount = invoicesItems.length;

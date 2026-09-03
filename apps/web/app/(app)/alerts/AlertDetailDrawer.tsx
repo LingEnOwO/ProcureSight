@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { SeverityBadge, StatusBadge } from "./_badges";
+import { SeverityBadge, AlertStatusBadge } from "@/components/badges";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -164,7 +164,7 @@ export default function AlertDetailDrawer({ alert, onClose }: Props) {
                 }}
               >
                 <SeverityBadge severity={severity} />
-                <StatusBadge status={status} />
+                <AlertStatusBadge status={status} />
               </div>
             </div>
             <button

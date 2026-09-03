@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 import psycopg
 from psycopg.rows import dict_row
@@ -91,7 +91,7 @@ async def get_vendor_unit_price_stats(
           mean_unit_price
         FROM vendor_unit_price_stats
         WHERE {where_clause}
-        ORDER BY sample_size DESC;
+        ORDER BY sample_size DESC, "desc";
     """
 
     async with db.cursor(row_factory=dict_row) as cur:
@@ -99,40 +99,74 @@ async def get_vendor_unit_price_stats(
         return await cur.fetchall()
 
 
-async def get_vendor_sku_baseline_price(
+async def get_vendor_unit_price_stats_for_skus(
     db: Any,
     *,
     org_id: str,
     vendor_id: str,
-    sku: str,
-    desc: Optional[str] = None,
-) -> Optional[Dict[str, Any]]:
+    skus: Sequence[str],
+) -> List[Dict[str, Any]]:
     """
-    Convenience helper: fetch a single baseline price record for a given
-    (org, vendor, sku[, desc]).
+    Fetch unit price statistics for a *set* of the vendor's SKUs in one round trip.
 
-    If multiple rows exist (e.g., duplicate SKU/description variants), the row
-    with the largest `sample_size` will be returned.
+    This is the batched form of `get_vendor_unit_price_stats`, for the case the
+    scoring adapter has: an invoice's worth of SKUs, wanted together. Scoring an
+    invoice used to issue one query per line; this issues one per invoice.
+
+    It fetches only the SKUs asked for — never the vendor's whole baseline set —
+    so the result size follows the invoice rather than the vendor's history.
+
+    No narrowing happens here. Every row matching a requested SKU comes back,
+    including the several description variants the view still groups separately
+    (see ADR-0001). Choosing between them is a scoring rule; see
+    `apps.api.services.anomaly_scoring.select_price_baseline`.
+
+    Rows are ordered by `sample_size DESC`, then `"desc"`, within a SKU —
+    the same relative order `get_vendor_unit_price_stats` returns for a single
+    SKU. The description is a tiebreaker, not a preference: the view groups by
+    `(org, vendor, sku, "desc")`, so it makes the order total, and without it two
+    baselines tied on `sample_size` could come back in either order and the
+    caller's "first row" would vary between the two queries.
+
+    Parameters
+    ----------
+    skus:
+        The SKUs to fetch baselines for. An empty sequence issues no query and
+        returns no rows.
 
     Returns
     -------
-    Dict[str, Any] | None
-        A single stats row from `vendor_unit_price_stats`, or None if no stats
-        exist for the given key.
+    List[Dict[str, Any]]
+        Rows from `vendor_unit_price_stats` with the same keys the singular
+        helpers return: `org_id`, `vendor_id`, `sku`, `"desc"`, `sample_size`,
+        `median_unit_price`, `mean_unit_price`.
     """
-    rows = await get_vendor_unit_price_stats(
-        db,
-        org_id=org_id,
-        vendor_id=vendor_id,
-        sku=sku,
-        desc=desc,
-    )
-    if not rows:
-        return None
+    sku_list = list(skus)
+    if not sku_list:
+        return []
 
-    # Because `get_vendor_unit_price_stats` already orders by sample_size DESC,
-    # the first row is the best baseline candidate.
-    return rows[0]
+    query = """
+        SELECT
+          org_id,
+          vendor_id,
+          sku,
+          "desc",
+          sample_size,
+          median_unit_price,
+          mean_unit_price
+        FROM vendor_unit_price_stats
+        WHERE org_id = %(org_id)s
+          AND vendor_id = %(vendor_id)s
+          AND sku = ANY(%(skus)s)
+        ORDER BY sku, sample_size DESC, "desc";
+    """
+
+    async with db.cursor(row_factory=dict_row) as cur:
+        await cur.execute(
+            query,
+            {"org_id": org_id, "vendor_id": vendor_id, "skus": sku_list},
+        )
+        return await cur.fetchall()
 
 
 # --- Vendor spend stats helpers ---

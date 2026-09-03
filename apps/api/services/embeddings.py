@@ -4,7 +4,6 @@ OpenAI embedding generation.
 Provides embed_texts() for batched embedding calls. Raises LLMUnavailableError
 when OPENAI_API_KEY is not configured so callers can degrade gracefully.
 """
-import os
 from typing import List
 
 from openai import OpenAI, APIError, APITimeoutError, RateLimitError
@@ -22,7 +21,7 @@ def embed_texts(texts: List[str]) -> List[List[float]]:
     Batches requests to stay within API limits. Raises LLMUnavailableError if
     OPENAI_API_KEY is not set. Retries up to 3 times on transient API errors.
     """
-    api_key = os.getenv("OPENAI_API_KEY") or settings.OPENAI_API_KEY
+    api_key = settings.openai_api_key
     if not api_key:
         raise LLMUnavailableError("OPENAI_API_KEY is not set")
 

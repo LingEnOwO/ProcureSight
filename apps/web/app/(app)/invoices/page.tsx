@@ -1,35 +1,24 @@
 import { serverFetch } from "@/lib/serverApiClient";
+import { asObject, extractItems, pickString, type UnknownRecord } from "@/lib/dataHelpers";
+import { InvoiceStatusBadge } from "@/components/badges";
+import { EmptyState } from "@/components/EmptyState";
 
 export const dynamic = "force-dynamic";
 
-type UnknownRecord = Record<string, unknown>;
-
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function asObject(value: unknown): UnknownRecord {
-  return value && typeof value === "object" ? (value as UnknownRecord) : {};
-}
-
 function pickIdLike(obj: UnknownRecord): string {
-  const v = obj.id ?? obj.invoice_id ?? obj.uuid;
-  return typeof v === "string" ? v : typeof v === "number" ? String(v) : "";
+  return pickString(obj, ["id", "invoice_id", "uuid"], { numberToString: true });
 }
 
 function pickInvoiceNoLike(obj: UnknownRecord): string {
-  const v = obj.invoice_no ?? obj.invoice_number ?? obj.number;
-  return typeof v === "string" ? v : "";
+  return pickString(obj, ["invoice_no", "invoice_number", "number"]);
 }
 
 function pickStatusLike(obj: UnknownRecord): string {
-  const v = obj.status;
-  return typeof v === "string" ? v : "";
+  return pickString(obj, ["status"]);
 }
 
 function pickCurrencyLike(obj: UnknownRecord): string {
-  const v = obj.currency;
-  return typeof v === "string" ? v : "";
+  return pickString(obj, ["currency"]);
 }
 
 function pickTotalLike(obj: UnknownRecord): string {
@@ -42,38 +31,18 @@ function pickTotalLike(obj: UnknownRecord): string {
 }
 
 function pickVendorIdLike(obj: UnknownRecord): string {
-  const v = obj.vendor_id ?? obj.vendorId;
-  return typeof v === "string" ? v : typeof v === "number" ? String(v) : "";
+  return pickString(obj, ["vendor_id", "vendorId"], { numberToString: true });
 }
 
 function pickInvoiceDateLike(obj: UnknownRecord): string {
-  const v = obj.invoice_date ?? obj.invoiceDate;
-  return typeof v === "string" ? v : "";
-}
-
-function StatusBadge({ status }: { status: string }) {
-  if (!status || status === "—") return <span style={{ color: "var(--text-muted)" }}>—</span>;
-  const s = status.toLowerCase();
-  let cls = "badge badge-gray";
-  if (s === "paid") cls = "badge badge-green";
-  else if (s === "pending") cls = "badge badge-yellow";
-  else if (s === "overdue") cls = "badge badge-red";
-  else if (s === "processing") cls = "badge badge-blue";
-  else if (s === "cancelled" || s === "canceled") cls = "badge badge-gray";
-  return <span className={cls}>{status}</span>;
+  return pickString(obj, ["invoice_date", "invoiceDate"]);
 }
 
 export default async function Page() {
   const response = await serverFetch("/invoices");
   const data = await response.json();
 
-  const raw = data as unknown;
-  const items =
-    asArray(asObject(raw).items).length > 0
-      ? asArray(asObject(raw).items)
-      : asArray(raw);
-
-  const invoices = items.map(asObject);
+  const invoices = extractItems(data).map(asObject);
 
   return (
     <div>
@@ -94,25 +63,21 @@ export default async function Page() {
       </div>
 
       {invoices.length === 0 ? (
-        <div className="table-wrapper">
-          <div className="empty-state">
-            <div className="empty-icon">
-              <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
-                <rect x="2" y="1" width="14" height="18" rx="2" stroke="currentColor" strokeWidth="1.5" />
-                <path
-                  d="M6 7h8M6 10.5h8M6 14h5"
-                  stroke="currentColor"
-                  strokeWidth="1.4"
-                  strokeLinecap="round"
-                />
-              </svg>
-            </div>
-            <div className="empty-title">No invoices yet</div>
-            <p className="empty-desc">
-              Once you ingest documents, invoices will appear here.
-            </p>
-          </div>
-        </div>
+        <EmptyState
+          icon={
+            <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+              <rect x="2" y="1" width="14" height="18" rx="2" stroke="currentColor" strokeWidth="1.5" />
+              <path
+                d="M6 7h8M6 10.5h8M6 14h5"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                strokeLinecap="round"
+              />
+            </svg>
+          }
+          title="No invoices yet"
+          description="Once you ingest documents, invoices will appear here."
+        />
       ) : (
         <div className="table-wrapper">
           <table>
@@ -147,7 +112,7 @@ export default async function Page() {
                       </span>
                     </td>
                     <td>
-                      <StatusBadge status={status} />
+                      <InvoiceStatusBadge status={status} />
                     </td>
                     <td>
                       {total !== "—" ? (

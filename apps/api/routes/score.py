@@ -2,11 +2,12 @@ from dataclasses import asdict
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends
-from fastapi.responses import JSONResponse
+from psycopg import AsyncConnection
 
 from apps.api.auth import get_user_context, UserContext
-from apps.api.db import async_pool
-from apps.api.services.anomaly_scoring import AlertCandidate, score_invoice
+from apps.api.deps import org_aconn
+from apps.api.models.alert import AlertCandidate
+from apps.api.services.anomaly_scoring import score_invoice
 
 router = APIRouter(prefix="/score", tags=["scoring"])
 
@@ -14,7 +15,8 @@ router = APIRouter(prefix="/score", tags=["scoring"])
 @router.post("/invoice/{invoice_id}")
 async def debug_score_invoice(
     invoice_id: str,
-    user_ctx: UserContext = Depends(get_user_context)
+    aconn: AsyncConnection = Depends(org_aconn),
+    user_ctx: UserContext = Depends(get_user_context),
 ) -> Dict[str, Any]:
     """
     Debug endpoint: re-run anomaly scoring for an existing invoice.
@@ -38,13 +40,11 @@ async def debug_score_invoice(
       SELECT id, org_id FROM invoices LIMIT 10;
       SELECT id FROM users WHERE email = 'uploader@demo.local';
     """
-    async with async_pool.connection() as aconn:
-        await aconn.execute("SELECT set_config('app.org_id', %s, true)", (str(user_ctx.org_id),))
-        alerts: List[AlertCandidate] = await score_invoice(
-            aconn,
-            org_id=user_ctx.org_id,
-            invoice_id=str(invoice_id),
-        )
+    alerts: List[AlertCandidate] = await score_invoice(
+        aconn,
+        org_id=user_ctx.org_id,
+        invoice_id=str(invoice_id),
+    )
 
     # Convert dataclass instances to plain dicts so they are JSON-serializable.
     alerts_payload: List[Dict[str, Any]] = [asdict(alert) for alert in alerts]

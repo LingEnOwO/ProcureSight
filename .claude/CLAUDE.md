@@ -124,8 +124,12 @@ Every org-scoped table has PostgreSQL RLS policies keyed on the `app.org_id` GUC
 
 - `apps/api/routes/` — FastAPI route handlers (thin, delegate to services/repos)
 - `apps/api/services/` — business logic (extraction, scoring, alert notifications, SSE, RAG explanations)
+  - `scoring_gather.py` — the gathering adapter. It fetches by keys derived from the invoice and never
+    narrows; any row selection is a rule in `anomaly_scoring.py`. It is *becoming* the only scoring code
+    that reads the database: `unit_price_delta` is a function of the snapshot and holds no connection,
+    while the other three rules in `anomaly_scoring.py` still read the database directly for now.
 - `apps/api/repos/` — all SQL queries (no ORM; raw psycopg3)
-- `apps/api/models/` — Pydantic request/response models
+- `apps/api/models/` — Pydantic request/response models, plus shared domain types that cross layers (e.g. `AlertCandidate`, `InvoiceSnapshot`)
 - `apps/api/worker/tasks.py` — ARQ job definitions
 - `apps/web/app/(app)/` — protected Next.js pages
 - `apps/web/app/(auth)/` — magic-link login pages
@@ -160,3 +164,17 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on every push:
 3. `build-web` — Next.js build
 
 Railway handles deployment automatically via its native GitHub integration — no CI deploy step needed.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live in GitHub Issues on `LingEnOwO/ProcureSight`, managed via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles, using their default label strings. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
