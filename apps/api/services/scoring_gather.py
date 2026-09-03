@@ -3,10 +3,10 @@
 Scoring an invoice is two steps — gather, then decide. This module is the first
 step. Once every rule consumes the snapshot it will be the only scoring code
 holding a connection, and everything downstream of ``gather_invoice_snapshot``
-will be arithmetic over plain data. That is true of ``unit_price_delta``, which
-is a function of the snapshot and issues no query of its own; the other three
-rules in ``anomaly_scoring`` still read the database themselves, and will until
-the changes that move them over land.
+will be arithmetic over plain data. That is true of ``unit_price_delta``,
+``vendor_volume_spike`` and ``contract_policy``, which are functions of the
+snapshot and issue no query of their own; only ``excessive_consulting`` still
+reads the database itself, and it does so deliberately — see clause 1 below.
 
 The adapter obeys two clauses, and they decide every case that comes after:
 
@@ -19,24 +19,31 @@ The adapter obeys two clauses, and they decide every case that comes after:
 2. **Return everything matching those keys, and never narrow.** No "best" row,
    no threshold, no drop. Where the code this replaces relied on ``ORDER BY
    sample_size DESC`` plus taking the first row, that selection is a rule and
-   lives in the scoring module as ``select_price_baseline``.
+   lives in the scoring module as ``select_price_baseline``. The vendor's spend
+   Baselines arrive the same way — every row the view returns, with
+   ``select_spend_baseline`` picking between them.
 
-``unit_price_delta`` is the rule that consumes it today, and the per-line
-Baseline query it used to issue is gone: an invoice's worth of lines now costs
-one batched fetch rather than one query per line.
+Three of the four rules consume it today, and the queries they used to issue
+are gone with them: the per-line Baseline query, the vendor spend stats read,
+and the vendor contract read all happen once here instead.
 
-Mid-migration that is not yet a net win on every invoice. The adapter's header
-and lines reads are a third read of data the other three rules still fetch for
-themselves, so a one-line invoice now costs six queries where it cost five. The
-Baseline saving overtakes that from two lines up, and the duplicate read goes
-away entirely once the remaining rules take their invoice off the snapshot.
+The duplicated reads go with them. Scoring an invoice with ``n`` lines used to
+cost ``6 + n`` queries — four copies of the joined header-and-lines read, one
+Baseline query per line, the spend stats and the contract. It now costs six,
+whatever ``n`` is: these five, plus the one joined read
+``excessive_consulting`` still makes for itself. That last copy goes when the
+consulting rule crosses the seam, and the joined read goes with it.
 """
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
 from apps.api.models.invoice_snapshot import InvoiceSnapshot
-from apps.api.repos.invoice_stats import get_vendor_unit_price_stats_for_skus
+from apps.api.repos.contracts import get_vendor_contract
+from apps.api.repos.invoice_stats import (
+    get_vendor_spend_stats,
+    get_vendor_unit_price_stats_for_skus,
+)
 from apps.api.repos.invoices import get_invoice_header, get_invoice_lines
 
 
@@ -48,8 +55,10 @@ async def gather_invoice_snapshot(
 ) -> Optional[InvoiceSnapshot]:
     """Read one invoice and everything the rules will need to score it.
 
-    Three reads: the header, the lines, and one batched Baseline fetch for the
-    Purchased Items those lines name.
+    Five reads: the header, the lines, one batched Baseline fetch for the
+    Purchased Items those lines name, the vendor's spend Baselines, and the
+    vendor's contract. All five are keyed by the invoice and its vendor, so
+    none of them needs a scoring decision made first.
 
     Returns ``None`` when the invoice does not exist in this org. An invoice
     that exists but has no lines yields a snapshot with an empty ``lines`` —
@@ -62,18 +71,28 @@ async def gather_invoice_snapshot(
 
     lines: List[Dict[str, Any]] = await get_invoice_lines(db, invoice_id=invoice_id)
 
+    vendor_id = str(invoice["vendor_id"])
+
     price_baselines = await _gather_price_baselines(
         db,
         org_id=org_id,
-        vendor_id=str(invoice["vendor_id"]),
+        vendor_id=vendor_id,
         lines=lines,
     )
+
+    spend_baselines = await get_vendor_spend_stats(
+        db, org_id=org_id, vendor_id=vendor_id
+    )
+
+    contract = await get_vendor_contract(db, org_id=org_id, vendor_id=vendor_id)
 
     return InvoiceSnapshot(
         org_id=str(org_id),
         invoice=invoice,
         lines=lines,
         price_baselines=price_baselines,
+        spend_baselines=spend_baselines,
+        contract=contract,
     )
 
 

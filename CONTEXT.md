@@ -48,10 +48,12 @@ _Avoid_: Proposed alert, draft alert, pending alert
 
 **Invoice snapshot**:
 Everything the scoring rules need about one invoice, gathered in advance and held as plain data:
-the invoice header, its lines, and the Baselines for the Purchased Items on those lines. One
-gathering adapter builds it, and is becoming the only scoring code that reads the database; a rule
-that has crossed the seam is a function over it, and `unit_price_delta` is the first. It never narrows — a snapshot holds every Baseline row matching a SKU, because
-choosing between them is a rule.
+the invoice header, its lines, the Baselines for the Purchased Items on those lines, the vendor's
+spend Baselines and the vendor's contract. One gathering adapter builds it, and is becoming the
+only scoring code that reads the database; a rule that has crossed the seam is a function over it,
+and three of the four have — `unit_price_delta`, `vendor_volume_spike` and `contract_policy`. It
+never narrows — a snapshot holds every Baseline row matching a SKU, because choosing between them
+is a rule.
 _Avoid_: Context, bundle, payload
 
 **Golden corpus**:

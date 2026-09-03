@@ -1,15 +1,17 @@
 """
 Characterization tests for the anomaly-scoring rules.
 
-These lock down the *current* behavior of the four scoring rules that had no
-direct coverage before (unit_price_delta, vendor_volume_spike,
-duplicate_invoice, contract_policy_violation) plus the score_invoice
-orchestrator. excessive_consulting is already covered in
-test_excessive_consulting.py.
+What is left here is what still needs a database: ``build_duplicate_alert``,
+which needs none but has always lived beside these, and the ``score_invoice``
+orchestrator, which does. Three of the four rules are functions of an
+InvoiceSnapshot now and their cases moved to files that need no connection —
+test_unit_price_rule.py, test_volume_spike_rule.py and
+test_contract_policy_rule.py. excessive_consulting, the rule that still holds a
+connection, is covered in test_excessive_consulting.py.
 
-They must stay green through the planned scoring refactor (splitting
-anomaly_scoring.py into a package) — any change in alert count, severity, or
-meta shape should be a deliberate, reviewed decision, not an accident.
+Everything here must stay green through the rest of the scoring/DB seam refactor
+(#15) — any change in alert count, severity, or meta shape should be a
+deliberate, reviewed decision, not an accident.
 
 Design notes
 ------------
@@ -35,8 +37,6 @@ import pytest
 from apps.api.services.anomaly_scoring import (
     score_invoice,
     build_duplicate_alert,
-    _score_vendor_volume_spikes_for_invoice,
-    _score_contract_policy_violations_for_invoice,
 )
 
 
@@ -128,10 +128,6 @@ def _days_ago(n):
     return (date.today() - timedelta(days=n)).isoformat()
 
 
-def _days_ahead(n):
-    return (date.today() + timedelta(days=n)).isoformat()
-
-
 def _uno(prefix):
     """Unique invoice number."""
     return f"{prefix}-{uuid.uuid4().hex[:8]}"
@@ -207,71 +203,10 @@ def _seed_price_history(db_conn, org_id, vendor_id, sku, desc, hist_price, n=5):
 # ===========================================================================
 # vendor_volume_spike
 # ===========================================================================
-
-def _seed_recent_invoices(db_conn, org_id, vendor_id, total, n):
-    """n recent (within 30d) historical invoices at `total`, no lines needed
-    (the spend-stats view aggregates invoices.total without joining lines)."""
-    for i in range(n):
-        _make_invoice(
-            db_conn, org_id, vendor_id, _uno("VHIST"), Decimal(str(total)),
-            invoice_date=_days_ago(i + 2),
-        )
-
-
-@pytest.mark.anyio
-async def test_volume_spike_high_severity(db_conn, adb, org_id):
-    """3x+ the vendor's recent median invoice total → high."""
-    vendor = _mk_vendor(db_conn, org_id)
-    _seed_recent_invoices(db_conn, org_id, vendor, 1000, n=5)
-    cur_inv = _make_invoice(db_conn, org_id, vendor, _uno("VCUR"), Decimal("8000"), _days_ago(1))
-    _make_line(db_conn, cur_inv, "X", "X", Decimal("8000"))  # current invoice needs a line
-
-    out = await _score_vendor_volume_spikes_for_invoice(adb, org_id=org_id, invoice_id=cur_inv)
-    assert len(out) == 1
-    c = out[0]
-    assert c.type == "vendor_volume_spike"
-    assert c.severity == "high"
-    assert c.meta["baseline_median_total"] == pytest.approx(1000.0)
-    assert c.meta["ratio"] == pytest.approx(8.0)
-    assert c.meta["baseline_window"] == "90d"
-
-
-@pytest.mark.anyio
-async def test_volume_spike_medium_severity(db_conn, adb, org_id):
-    """2x–3x recent median → medium."""
-    vendor = _mk_vendor(db_conn, org_id)
-    _seed_recent_invoices(db_conn, org_id, vendor, 1000, n=5)
-    cur_inv = _make_invoice(db_conn, org_id, vendor, _uno("VCUR"), Decimal("2500"), _days_ago(1))
-    _make_line(db_conn, cur_inv, "X", "X", Decimal("2500"))
-
-    out = await _score_vendor_volume_spikes_for_invoice(adb, org_id=org_id, invoice_id=cur_inv)
-    assert len(out) == 1
-    assert out[0].severity == "medium"
-    assert out[0].meta["ratio"] == pytest.approx(2.5)
-
-
-@pytest.mark.anyio
-async def test_volume_spike_no_alert_below_threshold(db_conn, adb, org_id):
-    """Below 2x recent median → no alert."""
-    vendor = _mk_vendor(db_conn, org_id)
-    _seed_recent_invoices(db_conn, org_id, vendor, 1000, n=5)
-    cur_inv = _make_invoice(db_conn, org_id, vendor, _uno("VCUR"), Decimal("1500"), _days_ago(1))
-    _make_line(db_conn, cur_inv, "X", "X", Decimal("1500"))
-
-    out = await _score_vendor_volume_spikes_for_invoice(adb, org_id=org_id, invoice_id=cur_inv)
-    assert out == []
-
-
-@pytest.mark.anyio
-async def test_volume_spike_no_alert_insufficient_history(db_conn, adb, org_id):
-    """Fewer than MIN_INVOICES_FOR_SPEND_BASELINE invoices in window → no baseline → no alert."""
-    vendor = _mk_vendor(db_conn, org_id)
-    _seed_recent_invoices(db_conn, org_id, vendor, 1000, n=3)  # +current = 4 < 5
-    cur_inv = _make_invoice(db_conn, org_id, vendor, _uno("VCUR"), Decimal("8000"), _days_ago(1))
-    _make_line(db_conn, cur_inv, "X", "X", Decimal("8000"))
-
-    out = await _score_vendor_volume_spikes_for_invoice(adb, org_id=org_id, invoice_id=cur_inv)
-    assert out == []
+#
+# A function of a snapshot too, so its cases live in test_volume_spike_rule.py.
+# Nothing is left here: the rule needs a vendor spend history *and* a spiking
+# invoice, which is several rows of setup to reach arithmetic that needs none.
 
 
 # ===========================================================================
@@ -330,94 +265,11 @@ def test_build_duplicate_alert_high_when_existing_total_missing():
 # ===========================================================================
 # contract_policy_violation
 # ===========================================================================
-
-@pytest.mark.anyio
-async def test_contract_no_alert_without_contract(db_conn, adb, org_id):
-    vendor = _mk_vendor(db_conn, org_id)
-    inv = _make_invoice(db_conn, org_id, vendor, _uno("NC"), Decimal("99999"), _days_ago(1))
-    _make_line(db_conn, inv, "X", "Anything", Decimal("99999"))
-
-    out = await _score_contract_policy_violations_for_invoice(adb, org_id=org_id, invoice_id=inv)
-    assert out == []
-
-
-@pytest.mark.anyio
-async def test_contract_spending_limit_exceeded(db_conn, adb, org_id):
-    vendor = _mk_vendor(db_conn, org_id)
-    _make_contract(db_conn, org_id, vendor, spending_limit=Decimal("1000"))
-    inv = _make_invoice(db_conn, org_id, vendor, _uno("SL"), Decimal("5000"), _days_ago(1))
-    _make_line(db_conn, inv, "X", "Widget", Decimal("5000"))
-
-    out = await _score_contract_policy_violations_for_invoice(adb, org_id=org_id, invoice_id=inv)
-    assert len(out) == 1
-    c = out[0]
-    assert c.type == "contract_policy_violation"
-    assert c.severity == "high"
-    assert c.meta["rule"] == "spending_limit_exceeded"
-    assert c.meta["spending_limit"] == pytest.approx(1000.0)
-    assert c.meta["invoice_total"] == pytest.approx(5000.0)
-
-
-@pytest.mark.anyio
-async def test_contract_unapproved_category(db_conn, adb, org_id):
-    vendor = _mk_vendor(db_conn, org_id)
-    _make_contract(db_conn, org_id, vendor, approved_categories=["office supplies"])
-    inv = _make_invoice(db_conn, org_id, vendor, _uno("UC"), Decimal("500"), _days_ago(1))
-    _make_line(db_conn, inv, "CONS", "Premium Consulting", Decimal("500"))
-
-    out = await _score_contract_policy_violations_for_invoice(adb, org_id=org_id, invoice_id=inv)
-    assert len(out) == 1
-    assert out[0].meta["rule"] == "unapproved_category"
-    assert out[0].severity == "high"
-
-
-@pytest.mark.anyio
-async def test_contract_approved_category_no_alert(db_conn, adb, org_id):
-    """A line whose text contains an approved category substring is allowed."""
-    vendor = _mk_vendor(db_conn, org_id)
-    _make_contract(db_conn, org_id, vendor, approved_categories=["office supplies"])
-    inv = _make_invoice(db_conn, org_id, vendor, _uno("AC"), Decimal("500"), _days_ago(1))
-    _make_line(db_conn, inv, "PAPER", "Office Supplies - Copy Paper", Decimal("500"))
-
-    out = await _score_contract_policy_violations_for_invoice(adb, org_id=org_id, invoice_id=inv)
-    assert out == []
-
-
-@pytest.mark.anyio
-async def test_contract_payment_terms_violation(db_conn, adb, org_id):
-    vendor = _mk_vendor(db_conn, org_id)
-    _make_contract(db_conn, org_id, vendor, payment_terms_days=30)
-    inv = _make_invoice(
-        db_conn, org_id, vendor, _uno("PT"), Decimal("500"),
-        invoice_date=_days_ago(1), due_date=_days_ahead(45),  # ~46 day terms
-    )
-    _make_line(db_conn, inv, "X", "Widget", Decimal("500"))
-
-    out = await _score_contract_policy_violations_for_invoice(adb, org_id=org_id, invoice_id=inv)
-    assert len(out) == 1
-    c = out[0]
-    assert c.severity == "medium"
-    assert c.meta["rule"] == "payment_terms_violation"
-    assert c.meta["contracted_days"] == 30
-    assert c.meta["actual_days"] > 30
-
-
-@pytest.mark.anyio
-async def test_contract_clean_invoice_no_alerts(db_conn, adb, org_id):
-    """Within spending limit, approved category, and payment terms → no alerts."""
-    vendor = _mk_vendor(db_conn, org_id)
-    _make_contract(
-        db_conn, org_id, vendor,
-        spending_limit=Decimal("10000"), approved_categories=["widget"], payment_terms_days=60,
-    )
-    inv = _make_invoice(
-        db_conn, org_id, vendor, _uno("OK"), Decimal("500"),
-        invoice_date=_days_ago(1), due_date=_days_ahead(30),
-    )
-    _make_line(db_conn, inv, "WID", "Widget Assembly", Decimal("500"))
-
-    out = await _score_contract_policy_violations_for_invoice(adb, org_id=org_id, invoice_id=inv)
-    assert out == []
+#
+# Its three sub-rules are covered from snapshot literals in
+# test_contract_policy_rule.py. The orchestrator test below still drives the
+# rule end to end against real Postgres, which is where the contract read and
+# the snapshot assembly are worth proving.
 
 
 # ===========================================================================

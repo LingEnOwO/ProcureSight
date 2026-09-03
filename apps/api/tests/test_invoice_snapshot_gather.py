@@ -38,7 +38,8 @@ DATABASE_URL = os.getenv(
     "DATABASE_URL", "postgresql://procure:procure@localhost:5432/procuresight"
 )
 
-MIN_SAMPLES = 5  # what the view needs before a baseline is worth comparing against
+MIN_SAMPLES = 5   # what the view needs before a price baseline is worth comparing against
+MIN_INVOICES = 5  # ditto for a vendor's spend baseline
 
 
 async def _baseline_the_old_query_resolved(db, *, org_id, vendor_id, sku, desc=None):
@@ -141,6 +142,29 @@ async def _mk_line(db, invoice_id, sku, desc, unit_price, qty=1):
     return line_id
 
 
+async def _mk_contract(db, org_id, vendor_id, *, spending_limit=None,
+                       approved_categories=None, payment_terms_days=None,
+                       effective_date=None, expiry_date=None):
+    async with db.cursor() as cur:
+        await cur.execute(
+            """
+            INSERT INTO vendor_contracts
+              (org_id, vendor_id, spending_limit, approved_categories,
+               payment_terms_days, effective_date, expiry_date)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (org_id, vendor_id, spending_limit, approved_categories,
+             payment_terms_days, effective_date, expiry_date),
+        )
+
+
+async def _seed_recent_spend(db, org_id, vendor_id, total, n=MIN_INVOICES):
+    """`n` invoices inside the spend-stats windows. No lines needed — the view
+    aggregates `invoices.total` without joining them."""
+    for i in range(n):
+        await _mk_invoice(db, org_id, vendor_id, total=Decimal(str(total)), days_ago=i + 2)
+
+
 async def _seed_price_history(db, org_id, vendor_id, sku, desc, price, n=MIN_SAMPLES):
     """`n` past invoices, each one line at `price` for (vendor, sku, desc)."""
     for i in range(n):
@@ -183,6 +207,175 @@ async def test_an_invoice_with_no_lines_is_a_snapshot_with_no_lines(db, org_id, 
     assert snapshot is not None
     assert snapshot.lines == []
     assert snapshot.price_baselines == {}
+
+
+@pytest.mark.anyio
+async def test_a_lineless_invoice_still_gathers_the_vendor_keyed_reads(db, org_id, vendor_id):
+    """The vendor's spend Baselines and contract are keyed by the vendor, not by
+    the lines, so the adapter fetches them either way. That the rules then raise
+    nothing for a lineless invoice is their decision, made in the rules."""
+    await _seed_recent_spend(db, org_id, vendor_id, 1000)
+    await _mk_contract(db, org_id, vendor_id, spending_limit=Decimal("1000"))
+    inv = await _mk_invoice(db, org_id, vendor_id)
+
+    snapshot = await gather_invoice_snapshot(db, org_id=org_id, invoice_id=inv)
+
+    assert snapshot.lines == []
+    assert snapshot.spend_baselines != []
+    assert snapshot.contract is not None
+
+
+# ===========================================================================
+# Spend Baselines and the contract: keyed by the vendor
+# ===========================================================================
+
+@pytest.mark.anyio
+async def test_the_snapshot_carries_the_vendors_spend_baselines(db, org_id, vendor_id):
+    await _seed_recent_spend(db, org_id, vendor_id, 1000)
+    inv = await _mk_invoice(db, org_id, vendor_id, total=Decimal("8000"))
+    await _mk_line(db, inv, "WIDGET", "Widget", Decimal("8000"))
+
+    snapshot = await gather_invoice_snapshot(db, org_id=org_id, invoice_id=inv)
+
+    assert len(snapshot.spend_baselines) == 1
+    row = snapshot.spend_baselines[0]
+    assert str(row["vendor_id"]) == vendor_id
+    assert row["median_invoice_total_90d"] == Decimal("1000")
+    assert row["invoice_count_90d"] >= MIN_INVOICES
+
+
+@pytest.mark.anyio
+async def test_a_thin_history_is_a_row_the_rule_rejects_not_a_missing_one(db, org_id, vendor_id):
+    """The adapter applies no threshold. A vendor whose only invoice is the one
+    being scored still gets a spend row — with a count of 1, which
+    ``score_vendor_volume_spikes`` then rejects. Deciding a history is too thin
+    is a rule, and the snapshot is where the rule reads it from."""
+    inv = await _mk_invoice(db, org_id, vendor_id, total=Decimal("8000"))
+    await _mk_line(db, inv, "WIDGET", "Widget", Decimal("8000"))
+
+    snapshot = await gather_invoice_snapshot(db, org_id=org_id, invoice_id=inv)
+
+    assert len(snapshot.spend_baselines) == 1
+    assert snapshot.spend_baselines[0]["invoice_count_90d"] == 1
+
+
+@pytest.mark.anyio
+async def test_a_history_outside_the_windows_is_a_row_with_no_medians(db, org_id, vendor_id):
+    """Same again at the other end: nothing inside 90 days leaves the counts at
+    zero and the medians null, rather than dropping the vendor's row."""
+    inv = await _mk_invoice(db, org_id, vendor_id, total=Decimal("8000"), days_ago=400)
+    await _mk_line(db, inv, "WIDGET", "Widget", Decimal("8000"))
+
+    snapshot = await gather_invoice_snapshot(db, org_id=org_id, invoice_id=inv)
+
+    assert len(snapshot.spend_baselines) == 1
+    row = snapshot.spend_baselines[0]
+    assert row["invoice_count_90d"] == 0
+    assert row["median_invoice_total_90d"] is None
+
+
+@pytest.mark.anyio
+async def test_spend_baselines_are_not_fetched_from_another_vendor(db, org_id, vendor_id):
+    other_vendor = await _mk_vendor(db, org_id)
+    await _seed_recent_spend(db, org_id, other_vendor, 9999)
+    await _seed_recent_spend(db, org_id, vendor_id, 1000)
+    inv = await _mk_invoice(db, org_id, vendor_id, total=Decimal("8000"))
+    await _mk_line(db, inv, "WIDGET", "Widget", Decimal("8000"))
+
+    snapshot = await gather_invoice_snapshot(db, org_id=org_id, invoice_id=inv)
+
+    assert [str(row["vendor_id"]) for row in snapshot.spend_baselines] == [vendor_id]
+
+
+@pytest.mark.anyio
+async def test_the_snapshot_carries_the_vendors_contract(db, org_id, vendor_id):
+    await _mk_contract(
+        db, org_id, vendor_id,
+        spending_limit=Decimal("1000"),
+        approved_categories=["office supplies"],
+        payment_terms_days=30,
+    )
+    inv = await _mk_invoice(db, org_id, vendor_id, total=Decimal("5000"))
+    await _mk_line(db, inv, "WIDGET", "Widget", Decimal("5000"))
+
+    snapshot = await gather_invoice_snapshot(db, org_id=org_id, invoice_id=inv)
+
+    assert snapshot.contract is not None
+    assert snapshot.contract["spending_limit"] == Decimal("1000")
+    assert snapshot.contract["approved_categories"] == ["office supplies"]
+    assert snapshot.contract["payment_terms_days"] == 30
+
+
+@pytest.mark.anyio
+async def test_the_contract_is_none_for_a_vendor_without_one(db, org_id, vendor_id):
+    inv = await _mk_invoice(db, org_id, vendor_id, total=Decimal("5000"))
+    await _mk_line(db, inv, "WIDGET", "Widget", Decimal("5000"))
+
+    snapshot = await gather_invoice_snapshot(db, org_id=org_id, invoice_id=inv)
+
+    assert snapshot.contract is None
+
+
+@pytest.mark.anyio
+async def test_an_expired_contract_is_not_gathered(db, org_id, vendor_id):
+    """The one narrowing the adapter still inherits from SQL. Which contract is
+    in effect is decided by the read's date predicates, exactly as it was before
+    the rule moved — so it is asserted here, where that read now lives."""
+    await _mk_contract(
+        db, org_id, vendor_id,
+        spending_limit=Decimal("1000"),
+        expiry_date=date.today() - timedelta(days=1),
+    )
+    inv = await _mk_invoice(db, org_id, vendor_id, total=Decimal("5000"))
+    await _mk_line(db, inv, "WIDGET", "Widget", Decimal("5000"))
+
+    snapshot = await gather_invoice_snapshot(db, org_id=org_id, invoice_id=inv)
+
+    assert snapshot.contract is None
+
+
+@pytest.mark.anyio
+async def test_a_contract_that_has_not_started_yet_is_not_gathered(db, org_id, vendor_id):
+    await _mk_contract(
+        db, org_id, vendor_id,
+        spending_limit=Decimal("1000"),
+        effective_date=date.today() + timedelta(days=1),
+    )
+    inv = await _mk_invoice(db, org_id, vendor_id, total=Decimal("5000"))
+    await _mk_line(db, inv, "WIDGET", "Widget", Decimal("5000"))
+
+    snapshot = await gather_invoice_snapshot(db, org_id=org_id, invoice_id=inv)
+
+    assert snapshot.contract is None
+
+
+@pytest.mark.anyio
+async def test_a_contract_whose_window_covers_today_is_gathered(db, org_id, vendor_id):
+    """The boundaries are inclusive on both ends."""
+    await _mk_contract(
+        db, org_id, vendor_id,
+        spending_limit=Decimal("1000"),
+        effective_date=date.today(),
+        expiry_date=date.today(),
+    )
+    inv = await _mk_invoice(db, org_id, vendor_id, total=Decimal("5000"))
+    await _mk_line(db, inv, "WIDGET", "Widget", Decimal("5000"))
+
+    snapshot = await gather_invoice_snapshot(db, org_id=org_id, invoice_id=inv)
+
+    assert snapshot.contract is not None
+
+
+@pytest.mark.anyio
+async def test_another_vendors_contract_is_not_gathered(db, org_id, vendor_id):
+    other_vendor = await _mk_vendor(db, org_id)
+    await _mk_contract(db, org_id, other_vendor, spending_limit=Decimal("1"))
+    inv = await _mk_invoice(db, org_id, vendor_id, total=Decimal("5000"))
+    await _mk_line(db, inv, "WIDGET", "Widget", Decimal("5000"))
+
+    snapshot = await gather_invoice_snapshot(db, org_id=org_id, invoice_id=inv)
+
+    assert snapshot.contract is None
 
 
 # ===========================================================================
