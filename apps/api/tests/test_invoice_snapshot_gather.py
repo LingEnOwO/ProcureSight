@@ -30,7 +30,10 @@ from apps.api.repos.invoice_stats import (
     get_vendor_unit_price_stats,
     get_vendor_unit_price_stats_for_skus,
 )
-from apps.api.services.anomaly_scoring import select_price_baseline
+from apps.api.services.anomaly_scoring import (
+    score_vendor_volume_spikes,
+    select_price_baseline,
+)
 from apps.api.services.scoring_gather import gather_invoice_snapshot
 
 
@@ -242,6 +245,75 @@ async def test_the_snapshot_carries_the_vendors_spend_baselines(db, org_id, vend
     assert str(row["vendor_id"]) == vendor_id
     assert row["median_invoice_total_90d"] == Decimal("1000")
     assert row["invoice_count_90d"] >= MIN_INVOICES
+
+
+@pytest.mark.anyio
+async def test_the_spend_row_carries_the_30d_window_the_rule_falls_back_to(
+    db, org_id, vendor_id
+):
+    """``score_vendor_volume_spikes`` reads four keys off the spend row, and the
+    30-day pair is only ever exercised by literal snapshots elsewhere. Pin the
+    names and types the view actually returns for them, so the rule's fallback
+    branch is reading something that exists."""
+    await _seed_recent_spend(db, org_id, vendor_id, 1000)
+    inv = await _mk_invoice(db, org_id, vendor_id, total=Decimal("8000"))
+    await _mk_line(db, inv, "WIDGET", "Widget", Decimal("8000"))
+
+    snapshot = await gather_invoice_snapshot(db, org_id=org_id, invoice_id=inv)
+
+    row = snapshot.spend_baselines[0]
+    assert row["invoice_count_30d"] >= MIN_INVOICES
+    assert row["median_invoice_total_30d"] == Decimal("1000")
+    assert row["total_spend_30d"] > 0
+
+
+@pytest.mark.anyio
+async def test_a_history_between_the_windows_fills_90d_and_leaves_30d_empty(
+    db, org_id, vendor_id
+):
+    """The windows are nested, not adjacent: the view counts the last 30 days and
+    the last 90 days off the same invoices. A history older than 30 days but
+    inside 90 is the only shape that separates them."""
+    for i in range(MIN_INVOICES):
+        await _mk_invoice(db, org_id, vendor_id, total=Decimal("1000"), days_ago=40 + i)
+    inv = await _mk_invoice(db, org_id, vendor_id, total=Decimal("8000"), days_ago=45)
+    await _mk_line(db, inv, "WIDGET", "Widget", Decimal("8000"))
+
+    snapshot = await gather_invoice_snapshot(db, org_id=org_id, invoice_id=inv)
+
+    row = snapshot.spend_baselines[0]
+    assert row["invoice_count_30d"] == 0
+    assert row["median_invoice_total_30d"] is None
+    assert row["invoice_count_90d"] >= MIN_INVOICES
+    assert row["median_invoice_total_90d"] == Decimal("1000")
+
+
+@pytest.mark.anyio
+async def test_a_history_wholly_inside_30_days_still_scores_off_the_90d_window(
+    db, org_id, vendor_id
+):
+    """Because the windows nest, ``invoice_count_90d`` is never below
+    ``invoice_count_30d``, and a non-null 30d median implies a non-null 90d one.
+    So no row this view can produce reaches the rule's 30d branch — even a vendor
+    whose entire history is inside 30 days is scored on the 90d window.
+
+    The fallback is therefore unreachable from real data. It stays because the
+    conversion moved this rule verbatim; changing it is a scoring decision, not
+    a gathering one. This test is what would fail first if the view's windows
+    ever stopped nesting."""
+    await _seed_recent_spend(db, org_id, vendor_id, 1000)
+    inv = await _mk_invoice(db, org_id, vendor_id, total=Decimal("8000"))
+    await _mk_line(db, inv, "WIDGET", "Widget", Decimal("8000"))
+
+    snapshot = await gather_invoice_snapshot(db, org_id=org_id, invoice_id=inv)
+    row = snapshot.spend_baselines[0]
+    assert row["invoice_count_30d"] >= MIN_INVOICES
+    assert row["median_invoice_total_30d"] is not None
+
+    alerts = score_vendor_volume_spikes(snapshot)
+
+    assert len(alerts) == 1
+    assert alerts[0].meta["baseline_window"] == "90d"
 
 
 @pytest.mark.anyio
