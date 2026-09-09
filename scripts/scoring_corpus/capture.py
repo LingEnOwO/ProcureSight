@@ -39,7 +39,11 @@ import psycopg
 
 from apps.api.models.invoice import Invoice
 from apps.api.repos.invoices import ensure_vendor, find_invoice_by_key
-from apps.api.services.anomaly_scoring import build_duplicate_alert, score_invoice
+from apps.api.services.anomaly_scoring import (
+    build_duplicate_alert,
+    score_invoice,
+    vector_chunk_retriever,
+)
 from apps.api.services.invoice_persistence import persist_invoice
 from apps.api.services.structured_extract import parse_json_bytes
 from apps.api.services.validator import validate_invoice
@@ -56,6 +60,7 @@ from scripts.scoring_corpus.tape import (
     alert_to_json,
     chunk_fingerprint,
     expected_from_dataset,
+    join_row,
     replay_entry_async,
     seam_function,
     stats_key,
@@ -77,21 +82,38 @@ DEFAULT_OUT = REPO_ROOT / "dataset" / "golden" / "scoring"
 def recording(tape: ScoringTape) -> Iterator[None]:
     """Run the scorer for real, writing every repository read into ``tape``.
 
-    The singular price read is not wrapped: no rule makes it any more, so
+    Every read is the gathering adapter's now, so they are wrapped there. The
+    header and the lines are recorded back into the joined ``invoice_rows``
+    shape a tape has always held, so tapes captured before and after this change
+    are the same format.
+
+    ``excessive_consulting``'s retrieval is not here: it is a parameter of
+    ``score_invoice``, recorded by ``recording_retriever`` below.
+
+    The singular price read is not wrapped either: no rule makes it any more, so
     wrapping it recorded nothing. The Baselines the snapshot is served from are
     read deliberately by ``record_sku_baselines`` instead, keyed by SKU alone.
     """
-    real_fetch_lines = seam_function("_fetch_invoice_lines")
+    real_header = seam_function("get_invoice_header")
+    real_lines = seam_function("get_invoice_lines")
     real_contract = seam_function("get_vendor_contract")
-    real_search = seam_function("_search_chunks_async")
     real_spend_stats = seam_function("get_vendor_spend_stats")
 
-    async def fetch_invoice_lines(db, *, org_id, invoice_id):
-        rows = await real_fetch_lines(db, org_id=org_id, invoice_id=invoice_id)
-        # The three rules still on the connection issue this same query;
-        # recording the first is enough.
-        if not tape.invoice_rows:
-            tape.invoice_rows = [dict(r) for r in rows]
+    # The adapter reads the header first and returns early when it is missing,
+    # so by the time the lines read runs there is always a header to join them
+    # to. Holding it here is what lets the two reads be recorded as one row.
+    header_row: Dict[str, Any] = {}
+
+    async def invoice_header(db, *, org_id, invoice_id):
+        row = await real_header(db, org_id=org_id, invoice_id=invoice_id)
+        if row is not None:
+            header_row.clear()
+            header_row.update(row)
+        return row
+
+    async def invoice_lines(db, *, invoice_id):
+        rows = await real_lines(db, invoice_id=invoice_id)
+        tape.invoice_rows = [join_row(header_row, dict(r)) for r in rows]
         return rows
 
     async def spend_stats(db, *, org_id, vendor_id=None):
@@ -104,8 +126,27 @@ def recording(tape: ScoringTape) -> Iterator[None]:
         tape.contracts[str(vendor_id)] = dict(row) if row is not None else None
         return row
 
-    async def search_chunks(db, org_id, query, source_types=None, limit=5):
-        chunks = await real_search(db, org_id, query, source_types=source_types, limit=limit)
+    with intercepting(
+        get_invoice_header=invoice_header,
+        get_invoice_lines=invoice_lines,
+        get_vendor_contract=vendor_contract,
+        get_vendor_spend_stats=spend_stats,
+    ):
+        yield
+
+
+def recording_retriever(tape: ScoringTape, db: Any) -> Any:
+    """The real retrieval port, with its one call written into ``tape``.
+
+    The rule owns the query text, so the recording keeps it alongside the chunks
+    — replay refuses to serve them for a different question.
+    """
+    real_retrieve = vector_chunk_retriever(db)
+
+    async def retrieve(*, org_id, query, source_types, limit):
+        chunks = await real_retrieve(
+            org_id=org_id, query=query, source_types=source_types, limit=limit
+        )
         tape.retrieval = {
             "query": query,
             "source_types": source_types,
@@ -114,13 +155,7 @@ def recording(tape: ScoringTape) -> Iterator[None]:
         }
         return chunks
 
-    with intercepting(
-        _fetch_invoice_lines=fetch_invoice_lines,
-        get_vendor_contract=vendor_contract,
-        _search_chunks_async=search_chunks,
-        get_vendor_spend_stats=spend_stats,
-    ):
-        yield
+    return retrieve
 
 
 async def record_sku_baselines(aconn: Any, tape: ScoringTape, *, org_id: str) -> None:
@@ -248,7 +283,12 @@ async def capture_scored_invoice(
 ) -> Dict[str, Any]:
     tape = ScoringTape(org_id=str(org_id), invoice_id=str(invoice_id))
     with recording(tape):
-        alerts = await score_invoice(aconn, org_id=str(org_id), invoice_id=str(invoice_id))
+        alerts = await score_invoice(
+            aconn,
+            org_id=str(org_id),
+            invoice_id=str(invoice_id),
+            retrieve=recording_retriever(tape, aconn),
+        )
 
     await record_sku_baselines(aconn, tape, org_id=str(org_id))
 

@@ -49,12 +49,19 @@ _Avoid_: Proposed alert, draft alert, pending alert
 **Invoice snapshot**:
 Everything the scoring rules need about one invoice, gathered in advance and held as plain data:
 the invoice header, its lines, the Baselines for the Purchased Items on those lines, the vendor's
-spend Baselines and the vendor's contract. One gathering adapter builds it, and is becoming the
-only scoring code that reads the database; a rule that has crossed the seam is a function over it,
-and three of the four have — `unit_price_delta`, `vendor_volume_spike` and `contract_policy`. It
-never narrows — a snapshot holds every Baseline row matching a SKU, because choosing between them
-is a rule.
+spend Baselines and the vendor's contract. One gathering adapter builds it, and every rule is a
+function over it, holding no connection of its own. It never narrows — a snapshot holds
+every Baseline row matching a SKU, because choosing between them is a rule.
 _Avoid_: Context, bundle, payload
+
+**Retrieval port**:
+The callable `excessive_consulting` asks its document search through, injected into the scoring
+entry point and defaulting to the real embed-and-search implementation. It exists because that
+rule's retrieval key is a scoring decision: the rule classifies which lines are consulting and
+builds the query text out of exactly those, so the chunks cannot be prefetched without moving the
+definition of "consulting" into the gathering adapter. Chunks are deliberately not a snapshot
+field — they are meaningful to one rule. Tests pass a port that replays recorded chunks.
+_Avoid_: Retriever service, search client, chunk provider
 
 **Golden corpus**:
 The recorded output of the scorer over the whole dataset, plus the database reads that produced

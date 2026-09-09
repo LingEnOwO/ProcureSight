@@ -71,9 +71,9 @@ Re-running is safe — it updates existing chunks in place (idempotent via `ON C
 
 ## How Detection Works
 
-1. During `score_invoice_job`, `_score_excessive_consulting_for_invoice()` runs alongside the other four scoring rules.
+1. During `score_invoice_job`, `score_excessive_consulting()` runs alongside the other scoring rules. It takes the invoice snapshot plus a retrieval port (`ChunkRetriever`), not a database connection; `score_invoice()` supplies the real embed-and-search port by default, and tests supply a fake one.
 2. It identifies invoice lines whose `desc` contains consulting keywords: `consulting`, `advisory`, `professional services`, `professional fee`, `services fee`, `hourly`, `strategy`, `management consulting`.
-3. For matching lines, it does a vector search on `doc_chunks` using the line descriptions combined with the query `"consulting rate limit professional services cap hourly rate"`.
+3. For matching lines, it asks the port for a vector search on `doc_chunks`, using the line descriptions combined with the query `"consulting rate limit professional services cap hourly rate"`.
 4. Retrieved chunks are scanned for hourly rate patterns (e.g. `$150.00 per hour`).
 5. Alert severity:
    - **`high`** — invoice hourly rate exceeds a contract rate limit found in retrieved chunks.
@@ -155,7 +155,7 @@ The tests require a running Postgres instance (set `DATABASE_URL`). They create 
 | `apps/api/services/embeddings.py` | OpenAI embedding generation |
 | `apps/api/services/doc_indexer.py` | Document chunking and upsert pipeline |
 | `apps/api/services/vector_retrieval.py` | Cosine similarity search over `doc_chunks` |
-| `apps/api/services/anomaly_scoring.py` | `_score_excessive_consulting_for_invoice()` |
+| `apps/api/services/anomaly_scoring.py` | `score_excessive_consulting()`, `ChunkRetriever`, `vector_chunk_retriever()` |
 | `apps/api/services/evidence_retrieval.py` | `retrieve_excessive_consulting()` |
 | `apps/api/services/rag_explainer.py` | `_fallback_excessive_consulting()` |
 | `scripts/index_documents.py` | CLI to index contracts/policies |
@@ -167,7 +167,7 @@ The tests require a running Postgres instance (set `DATABASE_URL`). They create 
 
 To add a new vector-search anomaly (e.g. `unusual_currency`, `vendor_name_variation`):
 
-1. Add a scorer function `_score_<type>_for_invoice()` in `anomaly_scoring.py` and call it from `score_invoice()`.
+1. Add a scorer function `score_<type>()` in `anomaly_scoring.py` and call it from `score_invoice()`. Take the snapshot, and an injected port for any retrieval whose key is itself a scoring decision.
 2. Add `retrieve_<type>()` in `evidence_retrieval.py` and extend the `retrieve_evidence()` dispatcher.
 3. Add `_fallback_<type>()` in `rag_explainer.py` and extend `_generate_fallback()`.
 4. Add `"<type>"` to `SUPPORTED_TYPES` in `rag_explainer.py`.

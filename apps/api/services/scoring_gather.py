@@ -1,21 +1,21 @@
 """The gathering adapter: where scoring reads the database.
 
 Scoring an invoice is two steps — gather, then decide. This module is the first
-step. Once every rule consumes the snapshot it will be the only scoring code
-holding a connection, and everything downstream of ``gather_invoice_snapshot``
-will be arithmetic over plain data. That is true of ``unit_price_delta``,
-``vendor_volume_spike`` and ``contract_policy``, which are functions of the
-snapshot and issue no query of their own; only ``excessive_consulting`` still
-reads the database itself, and it does so deliberately — see clause 1 below.
+step, and no rule holds a connection any more: everything downstream of
+``gather_invoice_snapshot`` is arithmetic over plain data, plus one injected
+port. The port's real implementation still runs a query of its own, and lives
+beside the rule that owns the question it asks — see ``ChunkRetriever``.
 
 The adapter obeys two clauses, and they decide every case that comes after:
 
 1. **Prefetch data whose keys are derivable from the snapshot input without
    making a scoring decision.** The Baseline keys are the SKUs on the invoice's
    lines — a projection of the lines, not a judgement about them, so they
-   qualify. Contrast the consulting rule's document retrieval, whose key
-   requires classifying which lines *are* consulting: that is rule-owned and
-   stays behind an injected port rather than moving here.
+   qualify. Contrast ``excessive_consulting``'s document retrieval, whose key
+   requires classifying which lines *are* consulting: that is rule-owned, so it
+   stays behind an injected port (``ChunkRetriever``) rather than moving here.
+   Chunks are deliberately not a snapshot field — they are meaningful to that
+   one rule.
 2. **Return everything matching those keys, and never narrow.** No "best" row,
    no threshold, no drop. Where the code this replaces relied on ``ORDER BY
    sample_size DESC`` plus taking the first row, that selection is a rule and
@@ -23,16 +23,14 @@ The adapter obeys two clauses, and they decide every case that comes after:
    Baselines arrive the same way — every row the view returns, with
    ``select_spend_baseline`` picking between them.
 
-Three of the four rules consume it today, and the queries they used to issue
-are gone with them: the per-line Baseline query, the vendor spend stats read,
-and the vendor contract read all happen once here instead.
+All four rules consume it, and the queries they used to issue are gone with
+them: the joined header-and-lines read, the per-line Baseline query, the vendor
+spend stats read and the vendor contract read all happen once here instead.
 
 The duplicated reads go with them. Scoring an invoice with ``n`` lines used to
 cost ``6 + n`` queries — four copies of the joined header-and-lines read, one
-Baseline query per line, the spend stats and the contract. It now costs six,
-whatever ``n`` is: these five, plus the one joined read
-``excessive_consulting`` still makes for itself. That last copy goes when the
-consulting rule crosses the seam, and the joined read goes with it.
+Baseline query per line, the spend stats and the contract. It now costs five,
+whatever ``n`` is.
 """
 from __future__ import annotations
 

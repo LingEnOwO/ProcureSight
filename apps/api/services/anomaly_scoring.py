@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Dict, List, Optional, Protocol
 
 from psycopg.rows import dict_row
 
@@ -83,45 +83,6 @@ def select_spend_baseline(
     where it is entangled with the minimum-invoice-count threshold.
     """
     return baselines[0] if baselines else None
-
-
-async def _fetch_invoice_lines(
-    db: Any,
-    *,
-    org_id: str,
-    invoice_id: str,
-) -> List[Dict[str, Any]]:
-    """One invoice joined to its lines, one flat row per line, scoped to an org.
-
-    The pre-seam read. ``excessive_consulting`` is the last rule that still
-    holds a connection and so the last caller: it takes its header fields off
-    the first row and iterates the rest. The three rules that have crossed the
-    seam read the same data off the snapshot. This goes away with the caller.
-    """
-    query = """
-        SELECT
-          i.id AS invoice_id,
-          i.org_id,
-          i.vendor_id,
-          i.invoice_no,
-          i.invoice_date,
-          i.due_date,
-          i.total AS invoice_total,
-          il.id AS line_id,
-          il.sku,
-          il."desc",
-          il.qty,
-          il.unit_price,
-          il.line_total
-        FROM invoices AS i
-        JOIN invoice_lines AS il
-          ON il.invoice_id = i.id
-        WHERE i.org_id = %(org_id)s
-          AND i.id = %(invoice_id)s;
-    """
-    async with db.cursor(row_factory=dict_row) as cur:
-        await cur.execute(query, {"org_id": org_id, "invoice_id": invoice_id})
-        return await cur.fetchall()
 
 
 def score_unit_price_deltas(snapshot: InvoiceSnapshot) -> List[AlertCandidate]:
@@ -524,6 +485,43 @@ def _extract_rates_from_text(text: str) -> list:
 _MIN_SIMILARITY = 0.5
 
 
+class ChunkRetriever(Protocol):
+    """The document retrieval ``excessive_consulting`` asks its question through.
+
+    This rule is the one deliberate exception to the snapshot pattern, and the
+    port is why the exception costs nothing. The rule cannot be made a function
+    of a prefetched snapshot: it decides which lines count as consulting, builds
+    its query text out of exactly those lines, and only then retrieves. The key
+    is a scoring decision, so prefetching the chunks would force the gathering
+    adapter to run the consulting classifier and own the query text — moving the
+    definition of "what counts as consulting" out of the rule that owns it and
+    into the I/O layer.
+
+    So the retrieval is injected instead. The classifier and the query text stay
+    here, and so does what the rule does with what comes back: the top-1 choice
+    for the contract rate, and the similarities copied into ``vector_evidence``.
+    Only the embed-and-search step is swappable. Chunks are not a snapshot field
+    — they are meaningful to this rule alone.
+
+    One thing the port does own: ``_MIN_SIMILARITY``, the floor below which a
+    chunk is not returned at all. It is applied inside the search rather than
+    after it because it and ``limit`` decide together which five chunks come
+    back — filtering after the fact would return a different set. A fake port
+    is therefore serving chunks that already passed the floor, which is exactly
+    what the recorded ones are.
+    """
+
+    def __call__(
+        self,
+        *,
+        org_id: str,
+        query: str,
+        source_types: Optional[List[str]],
+        limit: int,
+    ) -> Awaitable[List[Dict[str, Any]]]:
+        ...
+
+
 async def _search_chunks_async(
     db: Any,
     org_id: str,
@@ -581,11 +579,33 @@ async def _search_chunks_async(
         return await cur.fetchall()
 
 
-async def _score_excessive_consulting_for_invoice(
-    db: Any,
+def vector_chunk_retriever(db: Any) -> ChunkRetriever:
+    """The real port: embed the rule's query and search ``doc_chunks`` over pgvector.
+
+    The connection is captured here, at the one place scoring is handed one, so
+    that the rule downstream holds plain data and a callable. Tests pass a port
+    that replays recorded chunks instead, which is how the rule is covered
+    without an embedding API key or pgvector.
+    """
+
+    async def retrieve(
+        *,
+        org_id: str,
+        query: str,
+        source_types: Optional[List[str]],
+        limit: int,
+    ) -> List[Dict[str, Any]]:
+        return await _search_chunks_async(
+            db, org_id, query, source_types=source_types, limit=limit
+        )
+
+    return retrieve
+
+
+async def score_excessive_consulting(
+    snapshot: InvoiceSnapshot,
     *,
-    org_id: str,
-    invoice_id: str,
+    retrieve: ChunkRetriever,
 ) -> List[AlertCandidate]:
     """
     Rule: flag invoices that appear to contain excessive consulting/professional
@@ -594,18 +614,27 @@ async def _score_excessive_consulting_for_invoice(
     Severity:
       high   — contract rate limit found and invoice rate exceeds it
       medium — consulting total > threshold and no contract evidence found
+
+    Plain data plus a port: the invoice and its lines come off the snapshot, and
+    the one read this rule makes for itself goes through ``retrieve``. It holds
+    no connection. See ``ChunkRetriever`` for why this rule retrieves at all
+    rather than reading a prefetched field.
     """
-    rows = await _fetch_invoice_lines(db, org_id=org_id, invoice_id=invoice_id)
-    if not rows:
+    # An invoice with no lines raises nothing, as in the other rules: the joined
+    # read this rule used to issue returned no rows for such an invoice and it
+    # stopped here.
+    if not snapshot.lines:
         return []
 
-    header = rows[0]
-    vendor_id = header["vendor_id"]
-    invoice_no = header["invoice_no"]
+    invoice = snapshot.invoice
+    org_id = snapshot.org_id
+    invoice_id = str(invoice["id"])
+    vendor_id = invoice["vendor_id"]
+    invoice_no = invoice["invoice_no"]
 
     consulting_lines = [
-        r for r in rows
-        if r["desc"] and _is_consulting_line(r["desc"])
+        line for line in snapshot.lines
+        if line["desc"] and _is_consulting_line(line["desc"])
     ]
     if not consulting_lines:
         return []
@@ -620,12 +649,17 @@ async def _score_excessive_consulting_for_invoice(
     ]
     max_invoice_rate = max(invoice_rates) if invoice_rates else None
 
-    # Vector search for relevant contract/policy clauses
+    # Vector search for relevant contract/policy clauses. Which lines are
+    # consulting, and how they are phrased into a question, is decided here —
+    # that is the whole reason this read cannot be prefetched.
     query_text = " ".join(
         r["desc"] for r in consulting_lines if r["desc"]
     ) + " consulting rate limit professional services cap hourly rate"
-    chunks = await _search_chunks_async(
-        db, org_id, query_text, source_types=["contract", "policy"], limit=5
+    chunks = await retrieve(
+        org_id=org_id,
+        query=query_text,
+        source_types=["contract", "policy"],
+        limit=5,
     )
 
     logger.info(
@@ -710,14 +744,14 @@ async def _score_excessive_consulting_for_invoice(
         "contract_rate_found": contract_rate,
         "invoice_rate": max_invoice_rate,
         "invoice_no": invoice_no,
-        "invoice_id": str(invoice_id),
+        "invoice_id": invoice_id,
         "vendor_id": str(vendor_id),
     }
 
     return [
         AlertCandidate(
-            org_id=str(org_id),
-            invoice_id=str(invoice_id),
+            org_id=org_id,
+            invoice_id=invoice_id,
             vendor_id=str(vendor_id),
             type="excessive_consulting",
             severity=severity,
@@ -732,33 +766,35 @@ async def score_invoice(
     *,
     org_id: str,
     invoice_id: str,
+    retrieve: Optional[ChunkRetriever] = None,
 ) -> List[AlertCandidate]:
     """
     High-level scoring entry point for a single invoice.
     Aggregates alerts from all rule-based checks.
 
-    Gather, then decide — for three of the four rules. ``unit_price_delta``,
-    ``vendor_volume_spike`` and ``contract_policy`` are functions of the
-    snapshot; only ``excessive_consulting`` still takes the connection, because
-    its retrieval key is a scoring decision and cannot be prefetched.
+    Gather, then decide. Every rule is now a function of the snapshot; the one
+    read that survives inside a rule is ``excessive_consulting``'s document
+    retrieval, whose key is a scoring decision and so cannot be prefetched. It
+    arrives as ``retrieve``, defaulting to the real embed-and-search port bound
+    to ``db``. Tests pass a port that replays recorded chunks.
 
     Alert order is the order the rules run in, and it is part of what the golden
-    corpus pins. It is unchanged by which side of the seam a rule sits on.
+    corpus pins.
     """
     alerts: List[AlertCandidate] = []
 
     # A missing invoice yields no snapshot and so no alerts — the same silence
-    # the connection-taking rule produces when its query comes back empty.
+    # the rules produce when their inputs come back empty.
     snapshot = await gather_invoice_snapshot(db, org_id=org_id, invoice_id=invoice_id)
-    if snapshot is not None:
-        alerts.extend(score_unit_price_deltas(snapshot))
-        alerts.extend(score_vendor_volume_spikes(snapshot))
-        alerts.extend(score_contract_policy_violations(snapshot))
+    if snapshot is None:
+        return alerts
 
-    alerts.extend(
-        await _score_excessive_consulting_for_invoice(
-            db, org_id=org_id, invoice_id=invoice_id
-        )
-    )
+    if retrieve is None:
+        retrieve = vector_chunk_retriever(db)
+
+    alerts.extend(score_unit_price_deltas(snapshot))
+    alerts.extend(score_vendor_volume_spikes(snapshot))
+    alerts.extend(score_contract_policy_violations(snapshot))
+    alerts.extend(await score_excessive_consulting(snapshot, retrieve=retrieve))
 
     return alerts

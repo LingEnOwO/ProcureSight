@@ -208,15 +208,15 @@ class MissingTapeRead(KeyError):
 
 # ── The seam ─────────────────────────────────────────────────────────────────
 #
-# The five reads scoring makes, and where each is looked up. Capture wraps them
-# to record; replay replaces them to serve. Both go through `intercepting`, so a
-# sixth read is added here once rather than in two places.
+# The repository reads scoring makes, and where each is looked up. Capture wraps
+# them to record; replay replaces them to serve.
 #
-# The spend stats and the contract are read by the gathering adapter now, not by
-# the rules, so they are looked up there. Both are still recorded and served
-# through the seam rather than derived, because neither is a projection of
-# anything else on the tape. Their keys did not change — the vendor — so tapes
-# captured before those rules moved replay unchanged.
+# Every one of them is now made by the gathering adapter, so that is where they
+# are intercepted. The rules hold no connection at all: `excessive_consulting`,
+# the last one that did, asks its question through an injected retrieval port
+# instead, and both capture and replay pass that port to `score_invoice` rather
+# than patching a module attribute. The port is not on this seam because it is
+# not a seam — it is part of the scoring signature.
 #
 # The spend stats are intercepted at the *plural* repository function, which is
 # what the adapter calls: the singular helper narrowed (take the first row), and
@@ -229,16 +229,13 @@ class MissingTapeRead(KeyError):
 # at capture time, and its replay stub turns a per-line price query smuggled back
 # into a rule into a named MissingTapeRead rather than a crash against ``None``.
 #
-# The adapter's other three reads are served, not recorded. Everything they
-# return is already on the tape — the header and lines are a re-projection of
-# ``invoice_rows``, and the batched Baseline fetch is the per-SKU stats reads
-# ``record_sku_baselines`` writes at capture time. Deriving them keeps tapes
-# captured before the rules moved replayable afterwards, which is the whole
-# reason those per-SKU rows were recorded.
+# ``invoice_rows`` keeps the joined shape the deleted pre-seam read returned,
+# because tapes on disk were captured with it. Capture rebuilds that shape from
+# the adapter's header and lines reads via ``join_row``; replay takes it apart
+# again via ``reproject``. The batched Baseline fetch is likewise served from
+# the per-SKU stats reads ``record_sku_baselines`` writes at capture time.
 
 SEAM = {
-    "_fetch_invoice_lines": "apps.api.services.anomaly_scoring",
-    "_search_chunks_async": "apps.api.services.anomaly_scoring",
     "get_vendor_unit_price_stats": "apps.api.repos.invoice_stats",
     "get_invoice_header": "apps.api.services.scoring_gather",
     "get_invoice_lines": "apps.api.services.scoring_gather",
@@ -249,9 +246,9 @@ SEAM = {
 
 # Snapshot column -> the key it sits under in a recorded ``invoice_rows`` row.
 #
-# The joined read puts the header and the line in one namespace, so the two
+# The recorded row puts the header and the line in one namespace, so the two
 # `id`s and the two totals are aliased apart; the line's `invoice_id` is not
-# selected at all, and comes off the header's aliased `id`.
+# recorded separately, and comes off the header's aliased `id`.
 #
 # Stated here rather than imported from `repos`, because this describes a row
 # already written to a tape on disk, not whatever the reads select today. The
@@ -277,6 +274,25 @@ _LINE_FROM_ROW = {
     "unit_price": "unit_price",
     "line_total": "line_total",
 }
+
+
+def reproject(row: Dict[str, Any], columns: Dict[str, str]) -> Dict[str, Any]:
+    """One recorded joined row, taken apart into the columns a read returns."""
+    return {column: row[source] for column, source in columns.items()}
+
+
+def join_row(header: Dict[str, Any], line: Dict[str, Any]) -> Dict[str, Any]:
+    """One header and one line, put back into the joined shape a tape records.
+
+    The inverse of ``reproject``. Capture uses it so the tape format survives
+    the deletion of the joined read it was originally recorded from — tapes
+    already on disk replay unchanged.
+    """
+    row = {source: header[column] for column, source in _HEADER_FROM_ROW.items()}
+    for column, source in _LINE_FROM_ROW.items():
+        if source not in row:
+            row[source] = line[column]
+    return row
 
 
 def seam_module(name: str) -> Any:
@@ -312,9 +328,6 @@ def intercepting(**replacements: Any) -> Iterator[None]:
 def served_from(tape: ScoringTape) -> Iterator[None]:
     """Serve the scorer's database reads from ``tape`` for the duration."""
 
-    async def fetch_invoice_lines(db: Any, *, org_id: str, invoice_id: str) -> List[Dict[str, Any]]:
-        return [dict(row) for row in tape.invoice_rows]
-
     async def unit_price_stats(
         db: Any,
         *,
@@ -343,34 +356,6 @@ def served_from(tape: ScoringTape) -> Iterator[None]:
         contract = tape.contracts[key]
         return dict(contract) if contract is not None else None
 
-    async def search_chunks(
-        db: Any,
-        org_id: str,
-        query: str,
-        source_types: Optional[List[str]] = None,
-        limit: int = 5,
-    ) -> List[Dict[str, Any]]:
-        if tape.retrieval is None:
-            raise MissingTapeRead("chunk retrieval not recorded for this invoice")
-        # The query text is rule-owned — which lines count as consulting, and how
-        # they are phrased into a query. Serving recorded chunks for a different
-        # question would hide exactly the change worth catching.
-        asked = (query, source_types, limit)
-        recorded = (
-            tape.retrieval["query"],
-            tape.retrieval["source_types"],
-            tape.retrieval["limit"],
-        )
-        if asked != recorded:
-            raise MissingTapeRead(
-                f"chunks were retrieved for a different query:\n"
-                f"  recorded: {recorded!r}\n  asked   : {asked!r}"
-            )
-        return [dict(chunk) for chunk in tape.retrieval["chunks"]]
-
-    def reproject(row: Dict[str, Any], columns: Dict[str, str]) -> Dict[str, Any]:
-        return {column: row[source] for column, source in columns.items()}
-
     async def invoice_header(db: Any, *, org_id: str, invoice_id: str) -> Optional[Dict[str, Any]]:
         if not tape.invoice_rows:
             return None
@@ -393,9 +378,7 @@ def served_from(tape: ScoringTape) -> Iterator[None]:
         return rows
 
     with intercepting(
-        _fetch_invoice_lines=fetch_invoice_lines,
         get_vendor_contract=vendor_contract,
-        _search_chunks_async=search_chunks,
         get_vendor_unit_price_stats=unit_price_stats,
         get_vendor_spend_stats=spend_stats,
         get_invoice_header=invoice_header,
@@ -405,12 +388,53 @@ def served_from(tape: ScoringTape) -> Iterator[None]:
         yield
 
 
+def chunks_from(tape: ScoringTape) -> Any:
+    """A ``ChunkRetriever`` that replays the chunks recorded for this invoice.
+
+    Injected into ``score_invoice`` rather than patched over a module attribute:
+    the retrieval is a parameter of scoring now, so replay supplies it the same
+    way production supplies the real one. No embedding API key, no pgvector.
+    """
+
+    async def retrieve(
+        *,
+        org_id: str,
+        query: str,
+        source_types: Optional[List[str]],
+        limit: int,
+    ) -> List[Dict[str, Any]]:
+        if tape.retrieval is None:
+            raise MissingTapeRead("chunk retrieval not recorded for this invoice")
+        # The query text is rule-owned — which lines count as consulting, and how
+        # they are phrased into a query. Serving recorded chunks for a different
+        # question would hide exactly the change worth catching.
+        asked = (query, source_types, limit)
+        recorded = (
+            tape.retrieval["query"],
+            tape.retrieval["source_types"],
+            tape.retrieval["limit"],
+        )
+        if asked != recorded:
+            raise MissingTapeRead(
+                f"chunks were retrieved for a different query:\n"
+                f"  recorded: {recorded!r}\n  asked   : {asked!r}"
+            )
+        return [dict(chunk) for chunk in tape.retrieval["chunks"]]
+
+    return retrieve
+
+
 async def replay_scoring_async(tape: ScoringTape) -> List[AlertCandidate]:
     """Run the real scorer over a tape. No database, no network."""
     from apps.api.services.anomaly_scoring import score_invoice
 
     with served_from(tape):
-        return await score_invoice(None, org_id=tape.org_id, invoice_id=tape.invoice_id)
+        return await score_invoice(
+            None,
+            org_id=tape.org_id,
+            invoice_id=tape.invoice_id,
+            retrieve=chunks_from(tape),
+        )
 
 
 def replay_scoring(tape: ScoringTape) -> List[AlertCandidate]:
