@@ -212,9 +212,16 @@ class MissingTapeRead(KeyError):
 # to record; replay replaces them to serve. Both go through `intercepting`, so a
 # sixth read is added here once rather than in two places.
 #
-# The spend stats are intercepted at the *plural* repository function even
-# though the rule calls the singular helper: that helper narrows (take the first
-# row), and the corpus is about what the database returned before any narrowing.
+# The spend stats and the contract are read by the gathering adapter now, not by
+# the rules, so they are looked up there. Both are still recorded and served
+# through the seam rather than derived, because neither is a projection of
+# anything else on the tape. Their keys did not change — the vendor — so tapes
+# captured before those rules moved replay unchanged.
+#
+# The spend stats are intercepted at the *plural* repository function, which is
+# what the adapter calls: the singular helper narrowed (take the first row), and
+# the corpus is about what the database returned before any narrowing. That
+# narrowing is a rule now, `select_spend_baseline`.
 #
 # ``get_vendor_unit_price_stats`` is the singular price read that no scoring rule
 # makes any more — ``unit_price_delta`` reads Baselines from the snapshot. It
@@ -222,7 +229,7 @@ class MissingTapeRead(KeyError):
 # at capture time, and its replay stub turns a per-line price query smuggled back
 # into a rule into a named MissingTapeRead rather than a crash against ``None``.
 #
-# The gathering adapter's three reads are served, not recorded. Everything they
+# The adapter's other three reads are served, not recorded. Everything they
 # return is already on the tape — the header and lines are a re-projection of
 # ``invoice_rows``, and the batched Baseline fetch is the per-SKU stats reads
 # ``record_sku_baselines`` writes at capture time. Deriving them keeps tapes
@@ -231,13 +238,13 @@ class MissingTapeRead(KeyError):
 
 SEAM = {
     "_fetch_invoice_lines": "apps.api.services.anomaly_scoring",
-    "get_vendor_contract": "apps.api.services.anomaly_scoring",
     "_search_chunks_async": "apps.api.services.anomaly_scoring",
     "get_vendor_unit_price_stats": "apps.api.repos.invoice_stats",
-    "get_vendor_spend_stats": "apps.api.repos.invoice_stats",
     "get_invoice_header": "apps.api.services.scoring_gather",
     "get_invoice_lines": "apps.api.services.scoring_gather",
     "get_vendor_unit_price_stats_for_skus": "apps.api.services.scoring_gather",
+    "get_vendor_spend_stats": "apps.api.services.scoring_gather",
+    "get_vendor_contract": "apps.api.services.scoring_gather",
 }
 
 # Snapshot column -> the key it sits under in a recorded ``invoice_rows`` row.

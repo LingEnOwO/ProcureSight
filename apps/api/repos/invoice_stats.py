@@ -226,30 +226,3 @@ async def get_vendor_spend_stats(
     async with db.cursor(row_factory=dict_row) as cur:
         await cur.execute(query, values)
         return await cur.fetchall()
-
-
-async def get_single_vendor_spend_stats(
-    db: Any,
-    *,
-    org_id: str,
-    vendor_id: str,
-) -> Optional[Dict[str, Any]]:
-    """
-    Convenience helper: fetch a single vendor's spend stats record from
-    `vendor_spend_stats` for a given (org_id, vendor_id).
-
-    Returns
-    -------
-    Dict[str, Any] | None
-        A single stats row, or None if no stats exist for the given key.
-    """
-    rows = await get_vendor_spend_stats(
-        db,
-        org_id=org_id,
-        vendor_id=vendor_id,
-    )
-    if not rows:
-        return None
-
-    # The view groups by (org_id, vendor_id), so there should be at most one row.
-    return rows[0]

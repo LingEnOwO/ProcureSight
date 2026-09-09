@@ -8,8 +8,6 @@ from psycopg.rows import dict_row
 
 from apps.api.models.alert import AlertCandidate
 from apps.api.models.invoice_snapshot import InvoiceSnapshot
-from apps.api.repos.contracts import get_vendor_contract
-from apps.api.repos.invoice_stats import get_single_vendor_spend_stats
 from apps.api.services.scoring_gather import gather_invoice_snapshot
 
 logger = logging.getLogger(__name__)
@@ -68,6 +66,25 @@ def select_price_baseline(
     return candidates[0] if candidates else None
 
 
+def select_spend_baseline(
+    baselines: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Pick the one spend Baseline the invoice total is compared against.
+
+    A rule for the same reason ``select_price_baseline`` is one: the gathering
+    adapter hands over every ``vendor_spend_stats`` row for the vendor and makes
+    no choice between them. The view groups by ``(org_id, vendor_id)``, so there
+    is at most one row and "the first" is the whole of the choice — the same
+    thing the single-row repository helper this replaces did, moved to where the
+    decision belongs.
+
+    Which *window* within that row counts as the baseline — 90 day or 30 day —
+    is a separate decision, and stays inside ``score_vendor_volume_spikes``
+    where it is entangled with the minimum-invoice-count threshold.
+    """
+    return baselines[0] if baselines else None
+
+
 async def _fetch_invoice_lines(
     db: Any,
     *,
@@ -76,11 +93,10 @@ async def _fetch_invoice_lines(
 ) -> List[Dict[str, Any]]:
     """One invoice joined to its lines, one flat row per line, scoped to an org.
 
-    The pre-seam read: the three rules that still hold a connection take their
-    header fields off the first row and iterate the rest. ``unit_price_delta``
-    does not call it — it reads the same data off the snapshot — and the last
-    caller goes away when the remaining rules cross the seam, at which point
-    this goes with them.
+    The pre-seam read. ``excessive_consulting`` is the last rule that still
+    holds a connection and so the last caller: it takes its header fields off
+    the first row and iterates the rest. The three rules that have crossed the
+    seam read the same data off the snapshot. This goes away with the caller.
     """
     query = """
         SELECT
@@ -199,12 +215,7 @@ def score_unit_price_deltas(snapshot: InvoiceSnapshot) -> List[AlertCandidate]:
     return candidates
 
 
-async def _score_vendor_volume_spikes_for_invoice(
-    db: Any,
-    *,
-    org_id: str,
-    invoice_id: str,
-) -> List[AlertCandidate]:
+def score_vendor_volume_spikes(snapshot: InvoiceSnapshot) -> List[AlertCandidate]:
     """
     Rule: flag invoices whose total is significantly higher than the vendor's
     historical average invoice total.
@@ -212,24 +223,29 @@ async def _score_vendor_volume_spikes_for_invoice(
     Severity bands:
       medium — 2x–3x baseline average
       high   — 3x+ baseline average
+
+    A function of the snapshot, not of a connection. The vendor's spend
+    Baselines are already in ``snapshot.spend_baselines``, un-narrowed; picking
+    between them is ``select_spend_baseline``, above.
     """
-    rows = await _fetch_invoice_lines(db, org_id=org_id, invoice_id=invoice_id)
-    if not rows:
+    # An invoice with no lines raises nothing. The joined read this rule used to
+    # issue returned no rows for such an invoice, so it stopped here; the
+    # snapshot represents it as an invoice with empty ``lines`` instead, and the
+    # decision it used to make by accident is made deliberately.
+    if not snapshot.lines:
         return []
 
-    header = rows[0]
-    vendor_id = header["vendor_id"]
-    invoice_no = header["invoice_no"]
-    invoice_total = header["invoice_total"]
+    invoice = snapshot.invoice
+    org_id = snapshot.org_id
+    invoice_id = str(invoice["id"])
+    vendor_id = invoice["vendor_id"]
+    invoice_no = invoice["invoice_no"]
+    invoice_total = invoice["total"]
 
     if invoice_total is None:
         return []
 
-    baseline = await get_single_vendor_spend_stats(
-        db,
-        org_id=org_id,
-        vendor_id=vendor_id,
-    )
+    baseline = select_spend_baseline(snapshot.spend_baselines)
     if baseline is None:
         return []
 
@@ -275,7 +291,7 @@ async def _score_vendor_volume_spikes_for_invoice(
         "baseline_median_total": baseline_median_total,
         "invoice_total": float(invoice_total),
         "invoice_no": invoice_no,
-        "invoice_id": str(invoice_id),
+        "invoice_id": invoice_id,
         "vendor_id": str(vendor_id),
         "counts": {
             "invoice_count_30d": count_30d,
@@ -285,8 +301,8 @@ async def _score_vendor_volume_spikes_for_invoice(
 
     return [
         AlertCandidate(
-            org_id=str(org_id),
-            invoice_id=str(invoice_id),
+            org_id=org_id,
+            invoice_id=invoice_id,
             vendor_id=str(vendor_id),
             type="vendor_volume_spike",
             severity=severity,
@@ -347,12 +363,7 @@ def build_duplicate_alert(
     )
 
 
-async def _score_contract_policy_violations_for_invoice(
-    db: Any,
-    *,
-    org_id: str,
-    invoice_id: str,
-) -> List[AlertCandidate]:
+def score_contract_policy_violations(snapshot: InvoiceSnapshot) -> List[AlertCandidate]:
     """
     Rule: flag invoices that violate terms stored in vendor_contracts.
 
@@ -360,21 +371,29 @@ async def _score_contract_policy_violations_for_invoice(
       spending_limit_exceeded  — invoice total > contract spending limit       → high
       unapproved_category      — line item desc/sku not in approved_categories → high
       payment_terms_violation  — due_date - invoice_date > payment_terms_days  → medium
+
+    A function of the snapshot, not of a connection. The vendor's contract is
+    already in ``snapshot.contract``, and the lines the category sub-rule walks
+    are ``snapshot.lines``.
     """
-    rows = await _fetch_invoice_lines(db, org_id=org_id, invoice_id=invoice_id)
-    if not rows:
+    # As in the volume-spike rule: no lines, no alerts — not even the two
+    # sub-rules that only read the header. The joined read stopped here, and
+    # keeping the stop keeps the alerts identical.
+    if not snapshot.lines:
         return []
 
-    header = rows[0]
-    vendor_id = header["vendor_id"]
-    invoice_no = header["invoice_no"]
-    invoice_total = header["invoice_total"]
-    invoice_date = header["invoice_date"]
-    due_date = header["due_date"]
-
-    contract = await get_vendor_contract(db, org_id=org_id, vendor_id=vendor_id)
+    contract = snapshot.contract
     if contract is None:
         return []
+
+    invoice = snapshot.invoice
+    org_id = snapshot.org_id
+    invoice_id = str(invoice["id"])
+    vendor_id = invoice["vendor_id"]
+    invoice_no = invoice["invoice_no"]
+    invoice_total = invoice["total"]
+    invoice_date = invoice["invoice_date"]
+    due_date = invoice["due_date"]
 
     candidates: List[AlertCandidate] = []
 
@@ -384,8 +403,8 @@ async def _score_contract_policy_violations_for_invoice(
         if float(invoice_total) > float(spending_limit):
             candidates.append(
                 AlertCandidate(
-                    org_id=str(org_id),
-                    invoice_id=str(invoice_id),
+                    org_id=org_id,
+                    invoice_id=invoice_id,
                     vendor_id=str(vendor_id),
                     type="contract_policy_violation",
                     severity="high",
@@ -406,31 +425,31 @@ async def _score_contract_policy_violations_for_invoice(
     # 2. Approved categories — checked per line item
     approved_categories: Optional[List[str]] = contract["approved_categories"]
     if approved_categories:
-        for row in rows:
-            desc = (row["desc"] or "").lower()
-            sku = (row["sku"] or "").lower()
+        for line in snapshot.lines:
+            desc = (line["desc"] or "").lower()
+            sku = (line["sku"] or "").lower()
             line_text = f"{desc} {sku}".strip()
             matches_any = any(cat.lower() in line_text for cat in approved_categories)
             if not matches_any:
                 candidates.append(
                     AlertCandidate(
-                        org_id=str(org_id),
-                        invoice_id=str(invoice_id),
+                        org_id=org_id,
+                        invoice_id=invoice_id,
                         vendor_id=str(vendor_id),
                         type="contract_policy_violation",
                         severity="high",
                         message=(
-                            f"Line item '{row['desc'] or row['sku']}' on invoice "
+                            f"Line item '{line['desc'] or line['sku']}' on invoice "
                             f"{invoice_no or invoice_id} does not match any approved "
                             f"spend category for this vendor contract."
                         ),
                         meta={
                             "rule": "unapproved_category",
-                            "line_desc": row["desc"],
-                            "line_sku": row["sku"],
+                            "line_desc": line["desc"],
+                            "line_sku": line["sku"],
                             "approved_categories": approved_categories,
                             "invoice_no": invoice_no,
-                            "line_id": str(row["line_id"]),
+                            "line_id": str(line["id"]),
                         },
                     )
                 )
@@ -442,8 +461,8 @@ async def _score_contract_policy_violations_for_invoice(
         if actual_days > payment_terms_days:
             candidates.append(
                 AlertCandidate(
-                    org_id=str(org_id),
-                    invoice_id=str(invoice_id),
+                    org_id=org_id,
+                    invoice_id=invoice_id,
                     vendor_id=str(vendor_id),
                     type="contract_policy_violation",
                     severity="medium",
@@ -718,29 +737,23 @@ async def score_invoice(
     High-level scoring entry point for a single invoice.
     Aggregates alerts from all rule-based checks.
 
-    Half gather-then-decide, half not, and that is the state of the migration
-    rather than a design: ``unit_price_delta`` is a function of the snapshot,
-    while the other three still take the connection and read what they need.
+    Gather, then decide — for three of the four rules. ``unit_price_delta``,
+    ``vendor_volume_spike`` and ``contract_policy`` are functions of the
+    snapshot; only ``excessive_consulting`` still takes the connection, because
+    its retrieval key is a scoring decision and cannot be prefetched.
+
+    Alert order is the order the rules run in, and it is part of what the golden
+    corpus pins. It is unchanged by which side of the seam a rule sits on.
     """
     alerts: List[AlertCandidate] = []
 
     # A missing invoice yields no snapshot and so no alerts — the same silence
-    # the connection-taking rules produce when their query comes back empty.
+    # the connection-taking rule produces when its query comes back empty.
     snapshot = await gather_invoice_snapshot(db, org_id=org_id, invoice_id=invoice_id)
     if snapshot is not None:
         alerts.extend(score_unit_price_deltas(snapshot))
-
-    alerts.extend(
-        await _score_vendor_volume_spikes_for_invoice(
-            db, org_id=org_id, invoice_id=invoice_id
-        )
-    )
-
-    alerts.extend(
-        await _score_contract_policy_violations_for_invoice(
-            db, org_id=org_id, invoice_id=invoice_id
-        )
-    )
+        alerts.extend(score_vendor_volume_spikes(snapshot))
+        alerts.extend(score_contract_policy_violations(snapshot))
 
     alerts.extend(
         await _score_excessive_consulting_for_invoice(

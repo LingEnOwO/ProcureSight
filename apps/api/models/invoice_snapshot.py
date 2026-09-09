@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
 @dataclass(frozen=True)
@@ -19,8 +19,10 @@ class InvoiceSnapshot:
       decision — ``price_baselines`` is keyed by the SKUs on the lines, which is
       a projection of the lines rather than a judgement about them;
     * nothing here is narrowed. ``price_baselines`` maps a SKU to *every*
-      Baseline row matching it, in the order the view returned them. Picking one
-      is a rule (see ``select_price_baseline``), not I/O.
+      Baseline row matching it, in the order the view returned them, and
+      ``spend_baselines`` holds every ``vendor_spend_stats`` row for the vendor.
+      Picking one of either is a rule (see ``select_price_baseline`` and
+      ``select_spend_baseline``), not I/O.
 
     Attributes
     ----------
@@ -38,9 +40,22 @@ class InvoiceSnapshot:
         ``vendor_unit_price_stats``. Only SKUs present on ``lines`` appear, so
         snapshot size follows the invoice rather than the vendor's history.
         A SKU with no history simply has no entry.
+    spend_baselines:
+        The vendor's rows from ``vendor_spend_stats`` — 30- and 90-day invoice
+        counts and median totals. The view groups by ``(org_id, vendor_id)`` so
+        in practice there is at most one, but the list is what the read returns
+        and choosing from it is ``select_spend_baseline``'s job, not the
+        adapter's. A vendor with no history has an empty list.
+    contract:
+        The vendor's active contract row from ``vendor_contracts``, or ``None``
+        when the vendor has none in effect. Which contract counts as active is
+        decided by the query's date predicates, as it always was; the adapter
+        adds no selection of its own.
     """
 
     org_id: str
     invoice: Dict[str, Any]
     lines: List[Dict[str, Any]] = field(default_factory=list)
     price_baselines: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
+    spend_baselines: List[Dict[str, Any]] = field(default_factory=list)
+    contract: Optional[Dict[str, Any]] = None
