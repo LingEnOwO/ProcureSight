@@ -130,7 +130,8 @@ Every org-scoped table has PostgreSQL RLS policies keyed on the `app.org_id` GUC
     pattern — its retrieval key is a scoring decision, so it cannot be prefetched, and it asks
     through an injected `ChunkRetriever` port instead. Chunks are deliberately not a snapshot
     field. The port's real implementation (`vector_chunk_retriever`) is the one piece of scoring
-    code outside this adapter that still queries the database.
+    code outside this adapter that still holds a connection; its SQL lives in
+    `repos/doc_chunks.py` like every other query.
 - `apps/api/repos/` — all SQL queries (no ORM; raw psycopg3)
 - `apps/api/models/` — Pydantic request/response models, plus shared domain types that cross layers (e.g. `AlertCandidate`, `InvoiceSnapshot`)
 - `apps/api/worker/tasks.py` — ARQ job definitions

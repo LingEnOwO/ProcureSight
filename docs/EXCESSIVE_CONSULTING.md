@@ -154,7 +154,8 @@ The tests require a running Postgres instance (set `DATABASE_URL`). They create 
 |------|---------|
 | `apps/api/services/embeddings.py` | OpenAI embedding generation |
 | `apps/api/services/doc_indexer.py` | Document chunking and upsert pipeline |
-| `apps/api/services/vector_retrieval.py` | Cosine similarity search over `doc_chunks` |
+| `apps/api/repos/doc_chunks.py` | `search_chunks_by_embedding()` — cosine similarity search over `doc_chunks` |
+| `apps/api/services/vector_retrieval.py` | Sync cosine similarity search, used by the RAG explainer |
 | `apps/api/services/anomaly_scoring.py` | `score_excessive_consulting()`, `ChunkRetriever`, `vector_chunk_retriever()` |
 | `apps/api/services/evidence_retrieval.py` | `retrieve_excessive_consulting()` |
 | `apps/api/services/rag_explainer.py` | `_fallback_excessive_consulting()` |
@@ -171,4 +172,4 @@ To add a new vector-search anomaly (e.g. `unusual_currency`, `vendor_name_variat
 2. Add `retrieve_<type>()` in `evidence_retrieval.py` and extend the `retrieve_evidence()` dispatcher.
 3. Add `_fallback_<type>()` in `rag_explainer.py` and extend `_generate_fallback()`.
 4. Add `"<type>"` to `SUPPORTED_TYPES` in `rag_explainer.py`.
-5. Reuse `search_chunks()` from `vector_retrieval.py` for retrieval — no new infrastructure needed.
+5. Reuse `search_chunks_by_embedding()` from `repos/doc_chunks.py` for the search itself — no new infrastructure needed. `vector_chunk_retriever()` in `anomaly_scoring.py` shows the shape: embed the query text, then hand the vector to the repo.

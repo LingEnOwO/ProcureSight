@@ -4,10 +4,9 @@ import logging
 import re
 from typing import Any, Awaitable, Dict, List, Optional, Protocol
 
-from psycopg.rows import dict_row
-
 from apps.api.models.alert import AlertCandidate
 from apps.api.models.invoice_snapshot import InvoiceSnapshot
+from apps.api.repos.doc_chunks import search_chunks_by_embedding
 from apps.api.services.scoring_gather import gather_invoice_snapshot
 
 logger = logging.getLogger(__name__)
@@ -503,12 +502,13 @@ class ChunkRetriever(Protocol):
     Only the embed-and-search step is swappable. Chunks are not a snapshot field
     — they are meaningful to this rule alone.
 
-    One thing the port does own: ``_MIN_SIMILARITY``, the floor below which a
-    chunk is not returned at all. It is applied inside the search rather than
-    after it because it and ``limit`` decide together which five chunks come
-    back — filtering after the fact would return a different set. A fake port
-    is therefore serving chunks that already passed the floor, which is exactly
-    what the recorded ones are.
+    ``_MIN_SIMILARITY``, the floor below which a chunk is not returned at all,
+    is a scoring constant and lives beside this rule. It is not a parameter of
+    the port: the real implementation passes it down into the query, because it
+    and ``limit`` decide together which five chunks come back — filtering after
+    the fact would return a different set. So every port, real or fake, returns
+    chunks that have already passed the floor, which is exactly what the
+    recorded ones are. A fake has nothing to apply and nothing to vary.
     """
 
     def __call__(
@@ -544,39 +544,19 @@ async def _search_chunks_async(
             input=[query],
             dimensions=settings.EMBEDDING_DIMENSIONS,
         )
-        vector_str = "[" + ",".join(str(v) for v in resp.data[0].embedding) + "]"
+        embedding = resp.data[0].embedding
     except Exception as e:
         logger.warning("_search_chunks_async: embedding query failed: %s", e)
         return []
 
-    query_sql = """
-        SELECT
-          id,
-          source_type,
-          source_name,
-          chunk_text,
-          meta_json,
-          1 - (embedding <=> %(vec)s::vector) AS similarity
-        FROM doc_chunks
-        WHERE org_id = %(org_id)s
-          AND embedding IS NOT NULL
-          AND (%(types)s::text[] IS NULL OR source_type = ANY(%(types)s::text[]))
-          AND 1 - (embedding <=> %(vec)s::vector) >= %(min_sim)s
-        ORDER BY embedding <=> %(vec)s::vector
-        LIMIT %(limit)s
-    """
-    async with db.cursor(row_factory=dict_row) as cur:
-        await cur.execute(
-            query_sql,
-            {
-                "vec": vector_str,
-                "org_id": org_id,
-                "types": source_types,
-                "limit": limit,
-                "min_sim": _MIN_SIMILARITY,
-            },
-        )
-        return await cur.fetchall()
+    return await search_chunks_by_embedding(
+        db,
+        org_id=org_id,
+        embedding=embedding,
+        source_types=source_types,
+        limit=limit,
+        min_similarity=_MIN_SIMILARITY,
+    )
 
 
 def vector_chunk_retriever(db: Any) -> ChunkRetriever:
