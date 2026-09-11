@@ -22,6 +22,8 @@ from scripts.scoring_corpus.tape import (
     alert_to_json,
     decode,
     encode,
+    join_row,
+    reproject,
     replay_duplicate_check,
     replay_scoring,
     stats_key,
@@ -258,9 +260,20 @@ def test_the_replay_reprojection_covers_every_column_the_snapshot_reads_select()
     short, and the rules would see None where the database has a value. This is
     the check that turns that into a failure here instead.
 
-    It guards the column names, not the aliases they are read out from: renaming
-    an alias in `_fetch_invoice_lines` still breaks replay silently. Guarding
-    that half means parsing a SELECT that aliases, which this regex cannot do.
+    It guards the column names against the reads. The tape-side alias each maps
+    to is guarded by the round-trip below instead: capture and replay both go
+    through these two maps, so they cannot drift from each other.
     """
     assert set(_HEADER_FROM_ROW) == _selected_columns(get_invoice_header)
     assert set(_LINE_FROM_ROW) == _selected_columns(get_invoice_lines)
+
+
+def test_join_row_and_reproject_are_inverses():
+    """Capture writes a joined row; replay takes it apart. A tape only replays if
+    those two agree, and only these two functions decide it."""
+    row = _invoice_row()
+
+    header = reproject(row, _HEADER_FROM_ROW)
+    line = reproject(row, _LINE_FROM_ROW)
+
+    assert join_row(header, line) == row

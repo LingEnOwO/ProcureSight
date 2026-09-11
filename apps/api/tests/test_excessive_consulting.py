@@ -217,26 +217,77 @@ def test_search_chunks_returns_empty_without_api_key(db_conn, org_id):
 
 # ---------------------------------------------------------------------------
 # 3. Anomaly scorer
+#
+# The rule holds no connection: it takes a snapshot and a retrieval port. These
+# tests build both by hand, so they need neither Postgres nor pgvector nor an
+# embedding API key — which matters more for this rule than any other, since
+# every labelled anomaly for it is `future_rag` and contributes nothing to
+# current-rule recall. Replaying the captured corpus chunks through the same
+# port is covered in test_scoring_corpus_tape.py.
 # ---------------------------------------------------------------------------
 
+ORG = "11111111-1111-5111-8111-111111111111"
+VENDOR = "22222222-2222-5222-8222-222222222222"
+INVOICE = "33333333-3333-5333-8333-333333333333"
+
+
+def _snapshot(*lines: Dict[str, Any], total: Decimal) -> "InvoiceSnapshot":
+    from apps.api.models.invoice_snapshot import InvoiceSnapshot
+
+    return InvoiceSnapshot(
+        org_id=ORG,
+        invoice={
+            "id": INVOICE,
+            "org_id": ORG,
+            "vendor_id": VENDOR,
+            "invoice_no": "CONS-0001",
+            "invoice_date": None,
+            "due_date": None,
+            "total": total,
+        },
+        lines=list(lines),
+    )
+
+
+def _line(sku: str, desc: str, unit_price: Decimal, qty: Decimal) -> Dict[str, Any]:
+    return {
+        "id": str(uuid.uuid4()),
+        "invoice_id": INVOICE,
+        "sku": sku,
+        "desc": desc,
+        "qty": qty,
+        "unit_price": unit_price,
+        "line_total": unit_price * qty,
+    }
+
+
+def _port(chunks, calls=None):
+    """A fake ChunkRetriever that replays `chunks`, recording what it was asked."""
+
+    async def retrieve(*, org_id, query, source_types, limit):
+        if calls is not None:
+            calls.append({
+                "org_id": org_id,
+                "query": query,
+                "source_types": source_types,
+                "limit": limit,
+            })
+        return [dict(c) for c in chunks]
+
+    return retrieve
+
+
 @pytest.mark.anyio
-async def test_scorer_detects_excessive_consulting(db_conn, org_id, vendor_id):
-    """Score an invoice with consulting lines totalling > $5k; expect alert."""
-    from apps.api.services.anomaly_scoring import _score_excessive_consulting_for_invoice
+async def test_scorer_detects_excessive_consulting():
+    """Consulting lines totalling > $5k with no retrieved evidence: medium."""
+    from apps.api.services.anomaly_scoring import score_excessive_consulting
 
-    inv_id = _make_invoice(db_conn, org_id, vendor_id, f"CONS-{uuid.uuid4().hex[:6]}", Decimal("12000"))
-    _make_line(db_conn, inv_id, "CONS-001", "Professional Services Consulting", Decimal("300"), qty=40)
-    db_conn.commit()
+    snapshot = _snapshot(
+        _line("CONS-001", "Professional Services Consulting", Decimal("300"), Decimal("40")),
+        total=Decimal("12000"),
+    )
 
-    # Patch vector search to return an empty list (no contract found → medium severity)
-    with patch(
-        "apps.api.services.anomaly_scoring._search_chunks_async",
-        return_value=[],
-    ):
-        # Use a mock async DB that wraps our real connection
-        candidates = await _score_excessive_consulting_for_invoice(
-            _AsyncConnWrapper(db_conn), org_id=org_id, invoice_id=inv_id
-        )
+    candidates = await score_excessive_consulting(snapshot, retrieve=_port([]))
 
     assert len(candidates) == 1
     c = candidates[0]
@@ -246,14 +297,14 @@ async def test_scorer_detects_excessive_consulting(db_conn, org_id, vendor_id):
 
 
 @pytest.mark.anyio
-async def test_scorer_high_severity_when_rate_exceeded(db_conn, org_id, vendor_id):
+async def test_scorer_high_severity_when_rate_exceeded():
     """When contract rate is found and exceeded, severity should be high."""
-    from apps.api.services.anomaly_scoring import _score_excessive_consulting_for_invoice
+    from apps.api.services.anomaly_scoring import score_excessive_consulting
 
-    inv_id = _make_invoice(db_conn, org_id, vendor_id, f"CONS-{uuid.uuid4().hex[:6]}", Decimal("8250"))
-    _make_line(db_conn, inv_id, "CONS-002", "Management Consulting Advisory", Decimal("275"), qty=30)
-    db_conn.commit()
-
+    snapshot = _snapshot(
+        _line("CONS-002", "Management Consulting Advisory", Decimal("275"), Decimal("30")),
+        total=Decimal("8250"),
+    )
     fake_chunk = {
         "source_type": "contract",
         "source_name": "test_contract.txt",
@@ -261,13 +312,7 @@ async def test_scorer_high_severity_when_rate_exceeded(db_conn, org_id, vendor_i
         "similarity": 0.9,
     }
 
-    with patch(
-        "apps.api.services.anomaly_scoring._search_chunks_async",
-        return_value=[fake_chunk],
-    ):
-        candidates = await _score_excessive_consulting_for_invoice(
-            _AsyncConnWrapper(db_conn), org_id=org_id, invoice_id=inv_id
-        )
+    candidates = await score_excessive_consulting(snapshot, retrieve=_port([fake_chunk]))
 
     assert len(candidates) == 1
     c = candidates[0]
@@ -275,41 +320,71 @@ async def test_scorer_high_severity_when_rate_exceeded(db_conn, org_id, vendor_i
     assert c.severity == "high"
     assert c.meta["contract_rate_found"] == pytest.approx(150.0, abs=0.1)
     assert c.meta["invoice_rate"] == pytest.approx(275.0, abs=0.1)
+    assert c.meta["vector_evidence"][0]["source_name"] == "test_contract.txt"
 
 
 @pytest.mark.anyio
-async def test_scorer_no_alert_without_consulting_lines(db_conn, org_id, vendor_id):
+async def test_scorer_no_alert_without_consulting_lines():
     """Non-consulting invoice should produce no excessive_consulting alert."""
-    from apps.api.services.anomaly_scoring import _score_excessive_consulting_for_invoice
+    from apps.api.services.anomaly_scoring import score_excessive_consulting
 
-    inv_id = _make_invoice(db_conn, org_id, vendor_id, f"SUPP-{uuid.uuid4().hex[:6]}", Decimal("8000"))
-    _make_line(db_conn, inv_id, "PAPER-A4", "Copy Paper Case", Decimal("45"), qty=100)
-    _make_line(db_conn, inv_id, "PEN-BLK", "Ballpoint Pens Box", Decimal("8.75"), qty=50)
-    db_conn.commit()
+    snapshot = _snapshot(
+        _line("PAPER-A4", "Copy Paper Case", Decimal("45"), Decimal("100")),
+        _line("PEN-BLK", "Ballpoint Pens Box", Decimal("8.75"), Decimal("50")),
+        total=Decimal("8000"),
+    )
+    calls: list = []
 
-    with patch("apps.api.services.anomaly_scoring._search_chunks_async", return_value=[]):
-        candidates = await _score_excessive_consulting_for_invoice(
-            _AsyncConnWrapper(db_conn), org_id=org_id, invoice_id=inv_id
-        )
-
-    assert candidates == []
+    assert await score_excessive_consulting(snapshot, retrieve=_port([], calls)) == []
+    assert calls == [], "no consulting lines means no question to ask"
 
 
 @pytest.mark.anyio
-async def test_scorer_no_alert_below_threshold(db_conn, org_id, vendor_id):
+async def test_scorer_no_alert_below_threshold():
     """Consulting invoice below threshold with no contract rate should not alert."""
-    from apps.api.services.anomaly_scoring import _score_excessive_consulting_for_invoice
+    from apps.api.services.anomaly_scoring import score_excessive_consulting
 
-    inv_id = _make_invoice(db_conn, org_id, vendor_id, f"CONS-{uuid.uuid4().hex[:6]}", Decimal("1500"))
-    _make_line(db_conn, inv_id, "CONS-003", "Advisory Services", Decimal("150"), qty=10)
-    db_conn.commit()
+    snapshot = _snapshot(
+        _line("CONS-003", "Advisory Services", Decimal("150"), Decimal("10")),
+        total=Decimal("1500"),
+    )
 
-    with patch("apps.api.services.anomaly_scoring._search_chunks_async", return_value=[]):
-        candidates = await _score_excessive_consulting_for_invoice(
-            _AsyncConnWrapper(db_conn), org_id=org_id, invoice_id=inv_id
-        )
+    assert await score_excessive_consulting(snapshot, retrieve=_port([])) == []
 
-    assert candidates == []
+
+@pytest.mark.anyio
+async def test_the_rule_owns_the_question_it_asks_the_port():
+    """The query text is built from the consulting lines, which only the rule can
+    classify — the reason this retrieval is injected rather than prefetched."""
+    from apps.api.services.anomaly_scoring import score_excessive_consulting
+
+    snapshot = _snapshot(
+        _line("CONS-004", "Management Consulting Services", Decimal("400"), Decimal("40")),
+        _line("PAPER-A4", "Copy Paper Case", Decimal("45"), Decimal("10")),
+        total=Decimal("16450"),
+    )
+    calls: list = []
+
+    await score_excessive_consulting(snapshot, retrieve=_port([], calls))
+
+    assert calls == [
+        {
+            "org_id": ORG,
+            "query": (
+                "Management Consulting Services consulting rate limit "
+                "professional services cap hourly rate"
+            ),
+            "source_types": ["contract", "policy"],
+            "limit": 5,
+        }
+    ]
+
+
+@pytest.mark.anyio
+async def test_scorer_ignores_an_invoice_with_no_lines():
+    from apps.api.services.anomaly_scoring import score_excessive_consulting
+
+    assert await score_excessive_consulting(_snapshot(total=Decimal("0")), retrieve=_port([])) == []
 
 
 # ---------------------------------------------------------------------------
@@ -362,49 +437,3 @@ def test_fallback_explanation_no_llm_key(db_conn, org_id, vendor_id):
     llm = result["llm_output"]
     assert llm["confidence"] in {"low", "medium", "high"}
     assert any("150" in e for e in llm["evidence"])
-
-
-# ---------------------------------------------------------------------------
-# Async helper: wraps a sync psycopg connection for the async scorer
-# ---------------------------------------------------------------------------
-
-class _AsyncCursor:
-    """Thin wrapper that makes a sync psycopg cursor look async to the scorer."""
-
-    def __init__(self, conn, row_factory=None):
-        self._conn = conn
-        self._row_factory = row_factory
-        self._cur = None
-
-    async def __aenter__(self):
-        kwargs = {}
-        if self._row_factory:
-            kwargs["row_factory"] = self._row_factory
-        self._cur = self._conn.cursor(**kwargs)
-        return self
-
-    async def __aexit__(self, *args):
-        self._cur.close()
-
-    async def execute(self, query, params=None):
-        self._cur.execute(query, params)
-
-    async def fetchall(self):
-        return self._cur.fetchall()
-
-    async def fetchone(self):
-        return self._cur.fetchone()
-
-    @property
-    def description(self):
-        return self._cur.description
-
-
-class _AsyncConnWrapper:
-    """Wraps a sync psycopg connection so async scorer code can await it."""
-
-    def __init__(self, conn):
-        self._conn = conn
-
-    def cursor(self, row_factory=None):
-        return _AsyncCursor(self._conn, row_factory=row_factory)
